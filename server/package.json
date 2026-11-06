@@ -1,0 +1,21 @@
+{
+  "name": "audioapp-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AudioApp API (Cloudflare Workers + D1 + R2). docs/api-v1.md 를 구현한다.",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --local --port 8787",
+    "db:migrate": "wrangler d1 migrations apply audioapp --local",
+    "db:seed": "wrangler d1 execute audioapp --local --file=seed/dev-seed.sql",
+    "db:reset": "node scripts/reset-local-db.mjs",
+    "types": "wrangler types",
+    "check": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.0",
+    "wrangler": "^4.158.0"
+  }
+}

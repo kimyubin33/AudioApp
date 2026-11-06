@@ -1,0 +1,14 @@
+# 로컬 개발용 설정 예시. 이 파일을 `.dev.vars` 로 복사해서 쓴다. (.dev.vars 는 Git에 올라가지 않는다)
+# 배포할 때는 이 값들을 `wrangler secret put ...` 으로 따로 넣는다. 아래 값은 실제 서비스에 쓰면 안 된다.
+
+# 1이면 'dev-id-token' 으로 로그인할 수 있다 (Google 검증을 건너뜀). 로컬 개발 전용! 배포 환경에는 절대 두지 않는다.
+DEV_MODE=1
+
+# 접근 토큰 서명용 비밀값. 배포용은 길고 무작위여야 한다 (예: openssl rand -base64 48).
+TOKEN_SECRET=local-dev-secret-change-me-local-dev-secret-change-me
+
+# Google 웹 클라이언트 ID (docs/google-signin-setup.md). ID 토큰의 "받는 사람"이 이 값인지 확인한다.
+GOOGLE_CLIENT_ID=dev-client-id.apps.googleusercontent.com
+
+# 업로드된 파일이 공개되는 주소(R2 공개 도메인). 개발 중에는 비워 둬도 된다.
+MEDIA_BASE_URL=
