@@ -1,5 +1,6 @@
 uniffi::setup_scaffolding!();
 
+mod api;
 mod content;
 mod moderation;
 mod net;

@@ -9,6 +9,9 @@ uniffi = { version = "0.32.2", features = ["cli", "tokio"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 # reqwest와 UniFFI 비동기 함수가 쓰는 비동기 실행 환경. 필요한 기능만 켠다.
 tokio = { version = "1", features = ["rt-multi-thread"] }
+# 서버 응답(JSON)을 읽고 검증하기 위한 표준 라이브러리. uniffi의 하위 의존성으로 이미 들어와 있다.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [lib]
 crate-type = ["cdylib", "lib"]

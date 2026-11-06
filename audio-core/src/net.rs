@@ -65,8 +65,8 @@ impl From<TokenStoreError> for NetError {
     }
 }
 
-/// 서버 주소를 검증한다: https 전용, 계정정보(user:pass@)·쿼리·프래그먼트 없음.
-fn validate_base_url(raw: &str) -> Result<reqwest::Url, NetError> {
+/// https 주소의 공통 검사: https만, 호스트 있음, 계정정보(user:pass@)·프래그먼트 없음, 길이·제어 문자 제한.
+fn parse_https_url(raw: &str) -> Result<reqwest::Url, NetError> {
     if raw.is_empty() || raw.chars().count() > URL_MAX_CHARS || raw.chars().any(|c| c.is_control()) {
         return Err(NetError::InvalidBaseUrl);
     }
@@ -78,13 +78,24 @@ fn validate_base_url(raw: &str) -> Result<reqwest::Url, NetError> {
     if url.host_str().is_none_or(|h| h.is_empty()) {
         return Err(NetError::InvalidBaseUrl);
     }
-    if !url.username().is_empty() || url.password().is_some() {
-        return Err(NetError::InvalidBaseUrl);
-    }
-    if url.query().is_some() || url.fragment().is_some() {
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
         return Err(NetError::InvalidBaseUrl);
     }
     Ok(url)
+}
+
+/// 서버 주소를 검증한다: 공통 검사 + 쿼리 없음.
+fn validate_base_url(raw: &str) -> Result<reqwest::Url, NetError> {
+    let url = parse_https_url(raw)?;
+    if url.query().is_some() {
+        return Err(NetError::InvalidBaseUrl);
+    }
+    Ok(url)
+}
+
+/// 서버가 알려준 재생 주소를 검증한다. 서명된 주소는 쿼리가 있는 게 정상이라 쿼리는 허용한다.
+pub(crate) fn validate_stream_url(raw: &str) -> Result<String, NetError> {
+    parse_https_url(raw).map(|u| u.to_string())
 }
 
 /// 서버와 통신하는 객체. 아직 요청 기능은 없고, 주소 검증과 토큰 보관소 연결만 한다.

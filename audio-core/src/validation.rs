@@ -22,9 +22,27 @@ pub(crate) fn is_valid_id(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// 페이지 커서: 서버가 준 값을 주소에 그대로 붙이므로, 주소에서 안전한 문자만 허용한다. 1~256자.
+pub(crate) fn is_valid_cursor(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 256
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '=' | '~'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_rules() {
+        assert!(is_valid_cursor("abc-DEF_1.2=~"));
+        assert!(!is_valid_cursor(""));
+        assert!(!is_valid_cursor("a&b=c"));
+        assert!(!is_valid_cursor("a b"));
+        assert!(!is_valid_cursor("a/../b"));
+        assert!(!is_valid_cursor(&"a".repeat(257)));
+    }
 
     #[test]
     fn id_rules() {
