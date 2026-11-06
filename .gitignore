@@ -1,0 +1,15 @@
+# Rust 빌드 결과물 (cargo build로 다시 만들 수 있음)
+audio-core/target/
+
+# 자동 생성 파일: scripts/build-android.ps1 로 다시 만들 수 있음
+android/app/src/main/jniLibs/
+android/app/src/main/java/uniffi/
+
+# Android Studio 개인 설정
+android/.idea/
+
+# 비밀값 (실수로 올라가지 않도록)
+*.jks
+*.keystore
+.env
+.env.*
