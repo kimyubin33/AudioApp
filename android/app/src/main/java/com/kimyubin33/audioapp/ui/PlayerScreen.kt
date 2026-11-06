@@ -1,6 +1,7 @@
 package com.kimyubin33.audioapp.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,7 +34,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -40,7 +44,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.ui.compose.PlayerSurface
+import androidx.media3.ui.compose.modifiers.resizeWithContentScale
+import androidx.media3.ui.compose.state.rememberPresentationState
 import com.kimyubin33.audioapp.ui.theme.AudioAppTheme
 import kotlinx.coroutines.delay
 
@@ -51,11 +59,13 @@ fun PlayerScreen(
     title: String,
     creator: String,
     aiGenerated: Boolean,
+    isVideo: Boolean,
     onReport: () -> Unit,
     onBlock: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
+    var hasError by remember { mutableStateOf(player.playerError != null) }
     var positionMs by remember { mutableLongStateOf(player.currentPosition) }
     var durationMs by remember { mutableLongStateOf(player.duration.coerceAtLeast(0L)) }
 
@@ -63,6 +73,11 @@ fun PlayerScreen(
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(playing: Boolean) {
                 isPlaying = playing
+            }
+
+            // 재생 실패(네트워크 끊김, 깨진 파일, 기기가 지원하지 않는 형식 등)를 알려 준다
+            override fun onPlayerErrorChanged(error: PlaybackException?) {
+                hasError = error != null
             }
 
             override fun onEvents(player: Player, events: Player.Events) {
@@ -97,8 +112,37 @@ fun PlayerScreen(
         },
         onReport = onReport,
         onBlock = onBlock,
+        hasError = hasError,
+        onRetry = {
+            player.prepare() // 오류 상태를 풀고 처음부터 다시 불러온다
+            player.play()
+        },
+        video = if (isVideo) ({ VideoSurface(player) }) else null,
         modifier = modifier,
     )
+}
+
+/** 영상 화면. 영상 비율을 지켜서 16:9 검은 영역 안에 맞춘다. */
+@Composable
+private fun VideoSurface(player: Player, modifier: Modifier = Modifier) {
+    val presentationState = rememberPresentationState(player)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(16f / 9f)
+            .background(Color.Black),
+    ) {
+        PlayerSurface(
+            player = player,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .resizeWithContentScale(ContentScale.Fit, presentationState.videoSizeDp),
+        )
+        // 첫 화면이 준비되기 전에는 검게 가린다 (깜빡임 방지)
+        if (presentationState.coverSurface) {
+            Box(Modifier.matchParentSize().background(Color.Black))
+        }
+    }
 }
 
 /** 화면만 그린다. 상태는 모두 바깥에서 받는다 (그래서 Preview에서도 보인다). */
@@ -115,6 +159,11 @@ fun PlayerContent(
     onReport: () -> Unit,
     onBlock: () -> Unit,
     modifier: Modifier = Modifier,
+    /** 재생에 실패한 상태인가 */
+    hasError: Boolean = false,
+    onRetry: () -> Unit = {},
+    /** 영상일 때만 넘긴다. 오디오면 null */
+    video: (@Composable () -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
@@ -123,6 +172,11 @@ fun PlayerContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
+        if (video != null) {
+            video()
+            Spacer(Modifier.height(32.dp))
+        }
+
         // 모든 콘텐츠에 AI 생성 여부를 표시한다
         if (aiGenerated) {
             Text(
@@ -175,7 +229,19 @@ fun PlayerContent(
 
         PlayPauseButton(isPlaying = isPlaying, onClick = onTogglePlay)
 
-        Spacer(Modifier.height(48.dp))
+        if (hasError) {
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "재생할 수 없습니다.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            TextButton(onClick = onRetry) {
+                Text("다시 시도", color = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+
+        Spacer(Modifier.height(if (hasError) 16.dp else 48.dp))
 
         // 신고·차단은 눈에 띄지 않게, 하지만 언제든 찾을 수 있게 아래쪽에 둔다
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {

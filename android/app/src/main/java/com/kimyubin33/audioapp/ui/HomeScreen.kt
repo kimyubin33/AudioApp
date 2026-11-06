@@ -33,6 +33,7 @@ data class HomeItem(
     val title: String,
     val creator: String,
     val aiGenerated: Boolean,
+    val isVideo: Boolean = false,
 )
 
 @Composable
@@ -105,7 +106,11 @@ fun HomeScreen(
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            text = if (item.aiGenerated) "${item.creator} · AI 생성" else item.creator,
+                            text = listOfNotNull(
+                                item.creator,
+                                if (item.isVideo) "영상" else null,
+                                if (item.aiGenerated) "AI 생성" else null,
+                            ).joinToString(" · "),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -151,6 +156,7 @@ private fun StatusMessage(
 private val previewItems = listOf(
     HomeItem("1", "샘플 오디오 하나", "creator_01", true),
     HomeItem("2", "파리의 재즈", "creator_01", true),
+    HomeItem("3", "짧은 영상 샘플", "creator_01", true, isVideo = true),
 )
 
 @Preview(showBackground = true)

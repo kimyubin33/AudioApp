@@ -58,6 +58,17 @@ CONTENTS = [
         "ai_tool": "Udio",
         "stream_url": f"{STREAM_BASE}/play.mp3",
     },
+    {
+        # 샘플 영상(Big Buck Bunny)은 실제로는 약 10분이다. 숏폼 규칙(최대 180초)을 통과시키려고 적은 개발용 값이다.
+        "id": "sample-4",
+        "title": "짧은 영상 샘플",
+        "creator_id": "creator_01",
+        "kind": "short_video",
+        "duration_seconds": 180,
+        "ai_generated": True,
+        "ai_tool": None,
+        "stream_url": f"{STREAM_BASE}/BigBuckBunny_320x180.mp4",
+    },
 ]
 
 # 개발용 로그인: 이 ID 토큰으로만 로그인할 수 있고, 발급되는 접근 토큰도 고정값이다.

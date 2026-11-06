@@ -14,6 +14,7 @@ data class PlaybackSnapshot(
     val title: String,
     val creatorId: String,
     val aiGenerated: Boolean,
+    val isVideo: Boolean,
     val isPlaying: Boolean,
 )
 
@@ -41,6 +42,7 @@ private fun Player.snapshot(): PlaybackSnapshot {
         title = metadata?.title?.toString().orEmpty(),
         creatorId = metadata?.extras?.getString(EXTRA_CREATOR_ID).orEmpty(),
         aiGenerated = metadata?.extras?.getBoolean(EXTRA_AI_GENERATED, false) ?: false,
+        isVideo = metadata?.extras?.getBoolean(EXTRA_IS_VIDEO, false) ?: false,
         // 버퍼링 중에도 "재생 중"으로 보여서 버튼이 깜빡이지 않게 한다
         isPlaying = playWhenReady &&
             playbackState != Player.STATE_IDLE &&

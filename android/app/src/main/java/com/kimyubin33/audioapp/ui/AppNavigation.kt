@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import uniffi.audio_core.ContentDetail
+import uniffi.audio_core.ContentKind
 import uniffi.audio_core.ReportReason
 
 /** 플레이어 화면에서 띄우는 창 */
@@ -42,6 +43,7 @@ private data class PlayerRoute(
     val title: String,
     val creator: String,
     val aiGenerated: Boolean,
+    val isVideo: Boolean,
 ) : NavKey
 
 @Composable
@@ -90,6 +92,7 @@ fun AppNavigation(
                         title = content.title,
                         creator = content.creatorId,
                         aiGenerated = content.aiGenerated,
+                        isVideo = content.kind == ContentKind.SHORT_VIDEO,
                     )
                 )
             } catch (e: CancellationException) {
@@ -130,14 +133,24 @@ fun AppNavigation(
                         if (currentId != null) {
                             MiniPlayer(
                                 title = playback.title,
-                                subtitle = if (playback.aiGenerated) "${playback.creatorId} · AI 생성" else playback.creatorId,
+                                subtitle = listOfNotNull(
+                                    playback.creatorId,
+                                    if (playback.isVideo) "영상" else null,
+                                    if (playback.aiGenerated) "AI 생성" else null,
+                                ).joinToString(" · "),
                                 isPlaying = playback.isPlaying,
                                 onTogglePlay = { if (playback.isPlaying) player.pause() else player.play() },
                                 onOpen = {
                                     // 이미 로드된 곡이므로 다시 불러오지 않고 화면만 연다
                                     if (backStack.lastOrNull() == HomeRoute) {
                                         backStack.add(
-                                            PlayerRoute(currentId, playback.title, playback.creatorId, playback.aiGenerated)
+                                            PlayerRoute(
+                                                currentId,
+                                                playback.title,
+                                                playback.creatorId,
+                                                playback.aiGenerated,
+                                                playback.isVideo,
+                                            )
                                         )
                                     }
                                 },
@@ -196,6 +209,7 @@ fun AppNavigation(
                         title = key.title,
                         creator = key.creator,
                         aiGenerated = key.aiGenerated,
+                        isVideo = key.isVideo,
                         onReport = { dialog = ModerationDialog.Report },
                         onBlock = { dialog = ModerationDialog.Block },
                     )

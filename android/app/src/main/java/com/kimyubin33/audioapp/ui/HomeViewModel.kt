@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.audio_core.ContentDetail
+import uniffi.audio_core.ContentKind
 import uniffi.audio_core.NetException
 import uniffi.audio_core.ReportReason
 
@@ -102,6 +103,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                         title = it.content.title,
                         creator = it.content.creatorId,
                         aiGenerated = it.content.aiGenerated,
+                        isVideo = it.content.kind == ContentKind.SHORT_VIDEO,
                     )
                 }
                 _state.update {
