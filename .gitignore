@@ -1,7 +1,7 @@
 # Rust 빌드 결과물 (cargo build로 다시 만들 수 있음)
 audio-core/target/
 
-# 자동 생성 파일: scripts/build-android.ps1 로 다시 만들 수 있음
+# 자동 생성 파일: scripts/build_android.py 로 다시 만들 수 있음
 android/app/src/main/jniLibs/
 android/app/src/main/java/uniffi/
 
