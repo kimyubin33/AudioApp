@@ -10,7 +10,8 @@
 |---|---|
 | `audio-core/` | Rust 코어. 입력 검증, 서버 통신, 비즈니스 규칙. OS에 의존하지 않아서 나중에 iOS에서 재사용 |
 | `android/` | Kotlin + Jetpack Compose. 화면, Media3 재생, Keystore 같은 OS 기능 |
-| `dev-server/` | 개발용 HTTPS 목업 서버 (Python). 실제 서버가 생기기 전까지 사용 |
+| `server/` | **실제 서버**: Cloudflare Workers + D1 (TypeScript). `docs/api-v1.md`를 구현. 로컬에서도 그대로 돌아간다 |
+| `dev-server/` | 개발용 도구 (Python): `tls_proxy.py`는 로컬 서버에 HTTPS를 입혀 앱이 붙게 한다, `mock_server.py`는 서버 없이 쓰는 가짜 서버(예비) |
 | `docs/api-v1.md` | 서버 API 명세 (앱이 서버에 요구하는 것) |
 | `scripts/build_android.py` | Rust → 안드로이드 라이브러리 + Kotlin 바인딩 생성 |
 
@@ -22,9 +23,19 @@
 
 ```
 python scripts/build_android.py       # Rust 빌드 + Kotlin 바인딩 생성 (약 30초, 처음엔 몇 분)
-python dev-server/mock_server.py      # 목업 서버 (처음 실행하면 개발용 인증서도 만든다)
+
+cd server
+npm.cmd install                       # 처음 한 번 (PowerShell 실행 정책 때문에 npm 대신 npm.cmd)
+copy .dev.vars.example .dev.vars      # 로컬 설정 (Git에 올라가지 않는다)
+npm.cmd run db:reset                  # 로컬 데이터베이스 생성 + 샘플 데이터
+npm.cmd run dev                       # 서버 실행 (http://127.0.0.1:8787)
+
+python dev-server/tls_proxy.py        # 다른 터미널: 서버에 HTTPS를 입힘 (앱이 https://10.0.2.2:8443 으로 접속). 처음에는 개발용 인증서도 만든다
 ```
 그다음 Android Studio에서 ▶ Run.
+
+서버 시험: `npm.cmd test`(단위 테스트), `npm.cmd run smoke`(서버를 켜 둔 상태에서 API 전체 점검).
+서버 없이 앱만 볼 때는 `python dev-server/mock_server.py`(가짜 서버, 8443)를 대신 켜도 된다.
 
 **생성 파일(`jniLibs/`, `java/uniffi/`)과 인증서(`dev-server/certs/`)는 Git에 없습니다.** clone한 뒤에는 위 두 명령을 먼저 실행해야 앱이 빌드됩니다.
 Rust 코드를 바꿀 때마다 `build_android.py`를 다시 실행하세요.
@@ -34,7 +45,7 @@ Rust 코드를 바꿀 때마다 `build_android.py`를 다시 실행하세요.
 ```
 cd audio-core
 cargo test --lib                                          # 단위 테스트
-cargo test live_mock_server -- --ignored --nocapture      # 목업 서버를 켜 둔 상태에서 로그인·신고·차단 전체 흐름
+cargo test live_mock_server -- --ignored --nocapture      # (서버+tls_proxy 또는 목업 서버를 켜 둔 상태에서) Rust 클라이언트의 로그인·신고·차단 전체 흐름
 ```
 
 ## 보안 원칙 (지킬 것)
@@ -55,6 +66,8 @@ cargo test live_mock_server -- --ignored --nocapture      # 목업 서버를 켜
 - **개발용 인증서 신뢰:** 안드로이드에서는 reqwest의 기본 인증서 검사가 JNI 초기화를 요구해서, Rust에서 TLS 설정을 직접 만들고 Mozilla 루트를 내장했다. 목업 서버용 루트 인증서는 debug 빌드에만 들어가고(`res/raw/dev_ca.pem`), 사설망 주소가 아니면 Rust가 거부한다.
 - **release 빌드에서 `packageScope`를 쓰면 시작 시 `IllegalAccessError`로 죽는다.** 빼 두었고, UniFFI·JNA는 `keepRules/rules.keep`으로 보존한다. release를 바꿨다면 서명해서 실제로 실행해 볼 것.
 - **kotlinx-serialization은 `1.9.0`에 고정.** `1.10+`는 더 새로운 Kotlin 기본 라이브러리를 요구해서 Kotlin 2.2.x 컴파일러가 못 읽는다. Kotlin을 올릴 때 같이 올린다.
+- **오래된 토큰 때문에 공개 목록이 막히면 안 된다.** 서버는 위조·만료 토큰에 401을 준다. 로그인이 선택인 요청(목록·상세)은 401이면 토큰을 지우고 로그인 없이 한 번 더 시도한다 (`get_with_optional_login`).
+- **로컬 서버는 `.dev.vars`의 `DEV_MODE=1`일 때만 'dev-id-token' 가짜 로그인을 받는다.** 배포 환경에는 절대 설정하지 않는다 (`wrangler secret`으로는 TOKEN_SECRET·GOOGLE_CLIENT_ID만).
 - **Navigation 3의 화면 내용(`NavEntry`)은 값을 붙잡는다.** 바뀌는 상태는 값이 아니라 `State`/`StateFlow`로 넘겨서 화면 안에서 읽어야 갱신된다 (`homeState`가 그 예).
 - **에뮬레이터의 H.264 디코더(`c2.goldfish.h264.decoder`)가 영상 재생에 실패할 수 있다.** 오디오는 정상. 영상은 실제 기기에서 확인할 것.
 - `release` 프로필은 LTO라서 `uniffi-bindgen`까지 같이 빌드하면 매우 느리다. 빌드 스크립트가 `--lib`만 빌드하는 이유.

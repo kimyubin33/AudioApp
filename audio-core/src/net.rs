@@ -234,14 +234,14 @@ impl ApiClient {
     /// 콘텐츠 목록 한 페이지를 가져온다. (로그인 없이도 가능, 로그인돼 있으면 토큰을 함께 보낸다)
     pub async fn list_contents(&self, limit: u32, cursor: Option<String>) -> Result<ContentPage, NetError> {
         let path = list_contents_path(limit, cursor)?;
-        let body = self.request(Method::GET, &path, None, Auth::Optional).await?;
+        let body = self.get_with_optional_login(&path).await?;
         Ok(parse_content_page(body)?)
     }
 
     /// 콘텐츠 한 건의 상세와 재생 주소를 가져온다.
     pub async fn content_detail(&self, id: String) -> Result<ContentDetail, NetError> {
         let path = content_detail_path(id)?;
-        let body = self.request(Method::GET, &path, None, Auth::Optional).await?;
+        let body = self.get_with_optional_login(&path).await?;
         Ok(parse_content_detail(body)?)
     }
 
@@ -306,6 +306,16 @@ enum Auth {
 }
 
 impl ApiClient {
+    /// 로그인 없이도 되는 GET 요청. 저장된 토큰이 있으면 실어 보내지만, 서버가 그 토큰을 거부(401)하면
+    /// (만료·폐기된 토큰) [`request`]가 토큰을 지우므로, 로그인 없이 한 번 더 시도한다.
+    /// 그래서 오래된 토큰 때문에 누구나 볼 수 있는 목록이 막히는 일이 없다.
+    async fn get_with_optional_login(&self, path: &str) -> Result<String, NetError> {
+        match self.request(Method::GET, path, None, Auth::Optional).await {
+            Err(NetError::Unauthorized) => self.request(Method::GET, path, None, Auth::None).await,
+            other => other,
+        }
+    }
+
     /// 요청을 보내고 본문을 문자열로 돌려준다. (204처럼 본문이 없으면 빈 문자열)
     /// 본문 크기는 [`MAX_BODY_BYTES`]로 제한한다.
     async fn request(&self, method: Method, path: &str, body: Option<String>, auth: Auth) -> Result<String, NetError> {
@@ -449,7 +459,8 @@ mod tests {
     #[ignore]
     fn live_mock_server() {
         let pem = std::fs::read_to_string("../dev-server/certs/ca.pem").expect("ca.pem 없음 (목업 서버를 한 번 실행해야 함)");
-        let client = ApiClient::new("https://127.0.0.1:8443".into(), store(), Some(pem)).unwrap();
+        let tokens = store();
+        let client = ApiClient::new("https://127.0.0.1:8443".into(), tokens.clone(), Some(pem)).unwrap();
         let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
         runtime.block_on(async {
             // 내부 오류 원인을 보기 위해 reqwest를 직접 한 번 호출
@@ -467,7 +478,13 @@ mod tests {
             println!("list_contents: {page:?}");
             assert!(page.is_ok());
 
-            // 로그인·신고·차단 전체 흐름 (목업 서버는 개발용 ID 토큰 'dev-id-token' 만 받는다)
+            // 오래돼서 서버가 거부하는 토큰이 남아 있어도, 로그인 없이 볼 수 있는 목록은 막히지 않아야 한다
+            tokens.save_token("stale.token.value".into()).unwrap();
+            assert_eq!(client.has_session(), Ok(true));
+            assert!(client.list_contents(1, None).await.is_ok(), "오래된 토큰 때문에 목록이 막힘");
+            assert_eq!(client.has_session(), Ok(false), "거부된 토큰은 지워져야 함");
+
+            // 로그인·신고·차단 전체 흐름 (개발용 서버는 ID 토큰 'dev-id-token' 만 받는다)
             assert_eq!(client.has_session(), Ok(false));
             assert_eq!(client.block_creator("creator_02".into()).await, Err(NetError::Unauthorized));
             assert_eq!(client.sign_in_with_google("wrong-token".into()).await, Err(NetError::Unauthorized));
