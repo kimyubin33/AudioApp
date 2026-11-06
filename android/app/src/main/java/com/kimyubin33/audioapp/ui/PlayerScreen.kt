@@ -37,6 +37,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import com.kimyubin33.audioapp.ui.theme.AudioAppTheme
@@ -169,20 +170,21 @@ fun PlayerContent(
     }
 }
 
+/** 검은 원 안에 재생/일시정지 표시. 미니 플레이어에서도 크기만 바꿔 쓴다. */
 @Composable
-private fun PlayPauseButton(isPlaying: Boolean, onClick: () -> Unit) {
+internal fun PlayPauseButton(isPlaying: Boolean, onClick: () -> Unit, diameter: Dp = 72.dp) {
     val label = if (isPlaying) "일시정지" else "재생"
     val fill = MaterialTheme.colorScheme.primary
     val mark = MaterialTheme.colorScheme.onPrimary
     Box(
         modifier = Modifier
-            .size(72.dp)
+            .size(diameter)
             .clip(CircleShape)
             .clickable(role = Role.Button, onClickLabel = label, onClick = onClick)
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.size(72.dp)) {
+        Canvas(modifier = Modifier.size(diameter)) {
             drawCircle(color = fill)
             val s = size.minDimension
             if (isPlaying) {

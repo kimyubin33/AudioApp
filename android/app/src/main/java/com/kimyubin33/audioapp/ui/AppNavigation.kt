@@ -1,7 +1,9 @@
 package com.kimyubin33.audioapp.ui
 
+import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -28,16 +30,13 @@ fun AppNavigation(
     modifier: Modifier = Modifier,
 ) {
     val backStack = rememberNavBackStack(HomeRoute)
+    val playback by rememberPlaybackSnapshot(player)
 
     NavDisplay(
         backStack = backStack,
         modifier = modifier,
-        onBack = {
-            // 미니 플레이어가 생기기 전까지는 플레이어 화면을 떠나면 멈춘다.
-            // (화면 회전 때는 이 콜백이 불리지 않으므로 재생이 끊기지 않는다)
-            if (backStack.lastOrNull() is PlayerRoute) player.pause()
-            backStack.removeLastOrNull()
-        },
+        // 플레이어 화면에서 뒤로 가도 재생은 이어지고, 홈의 미니 플레이어로 제어한다
+        onBack = { backStack.removeLastOrNull() },
         entryProvider = { key ->
             when (key) {
                 is HomeRoute -> NavEntry(key) {
@@ -49,18 +48,36 @@ fun AppNavigation(
                             aiGenerated = it.content.aiGenerated,
                         )
                     }
-                    HomeScreen(
-                        items = items,
-                        onOpen = { id ->
-                            // 같은 곡을 연타해도 화면이 겹치지 않게 한다
-                            val track = SampleCatalog.find(id)
-                            if (track != null && backStack.lastOrNull() == HomeRoute) {
-                                onPlayRequested()
-                                playTrack(player, track)
-                                backStack.add(PlayerRoute(id))
-                            }
-                        },
-                    )
+                    // 지금 로드된 곡 (목록에 없는 곡이면 미니 플레이어를 숨긴다)
+                    val current = playback.mediaId?.let { SampleCatalog.find(it) }
+
+                    Column {
+                        HomeScreen(
+                            items = items,
+                            onOpen = { id ->
+                                // 같은 곡을 연타해도 화면이 겹치지 않게 한다
+                                val track = SampleCatalog.find(id)
+                                if (track != null && backStack.lastOrNull() == HomeRoute) {
+                                    onPlayRequested()
+                                    playTrack(player, track)
+                                    backStack.add(PlayerRoute(id))
+                                }
+                            },
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (current != null) {
+                            MiniPlayer(
+                                title = current.content.title,
+                                subtitle = "${current.content.creatorId} · AI 생성",
+                                isPlaying = playback.isPlaying,
+                                onTogglePlay = { if (playback.isPlaying) player.pause() else player.play() },
+                                onOpen = {
+                                    // 이미 로드된 곡이므로 다시 불러오지 않고 화면만 연다
+                                    if (backStack.lastOrNull() == HomeRoute) backStack.add(PlayerRoute(current.id))
+                                },
+                            )
+                        }
+                    }
                 }
 
                 is PlayerRoute -> NavEntry(key) {
