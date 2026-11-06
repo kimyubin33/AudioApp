@@ -1,6 +1,8 @@
 uniffi::setup_scaffolding!();
 
 mod content;
+mod moderation;
+mod validation;
 
 /// Kotlin에서 부를 첫 번째 함수
 #[uniffi::export]

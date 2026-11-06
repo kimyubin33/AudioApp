@@ -3,8 +3,9 @@
 
 use std::fmt;
 
+use crate::validation::{is_clean_text, is_valid_id};
+
 const TITLE_MAX_CHARS: usize = 100;
-const CREATOR_ID_MAX_CHARS: usize = 64;
 const AI_TOOL_MAX_CHARS: usize = 50;
 const AUDIO_MAX_SECONDS: u32 = 4 * 60 * 60; // 4시간
 const VIDEO_MAX_SECONDS: u32 = 180; // 3분
@@ -53,11 +54,6 @@ impl fmt::Display for ContentError {
 
 impl std::error::Error for ContentError {}
 
-fn is_clean_text(s: &str, max_chars: usize) -> bool {
-    let n = s.chars().count();
-    n >= 1 && n <= max_chars && !s.chars().any(|c| c.is_control())
-}
-
 /// 새 콘텐츠를 검증해서 만든다. 하나라도 어긋나면 오류를 돌려준다.
 #[uniffi::export]
 pub fn create_content(
@@ -73,13 +69,7 @@ pub fn create_content(
         return Err(ContentError::InvalidTitle);
     }
 
-    // 크리에이터 ID: 영문·숫자·'-'·'_' 만 허용
-    let id_ok = !creator_id.is_empty()
-        && creator_id.chars().count() <= CREATOR_ID_MAX_CHARS
-        && creator_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-    if !id_ok {
+    if !is_valid_id(&creator_id) {
         return Err(ContentError::InvalidCreatorId);
     }
 
