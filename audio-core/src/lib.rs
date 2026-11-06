@@ -2,6 +2,7 @@ uniffi::setup_scaffolding!();
 
 mod content;
 mod moderation;
+mod net;
 mod validation;
 
 /// Kotlin에서 부를 첫 번째 함수

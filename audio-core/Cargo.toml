@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-uniffi = { version = "0.32.2", features = ["cli"] }
+uniffi = { version = "0.32.2", features = ["cli", "tokio"] }
+# HTTPS 통신. 기본 기능(default-tls 등)을 끄고 rustls만 사용한다 (OpenSSL 사용 안 함).
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# reqwest와 UniFFI 비동기 함수가 쓰는 비동기 실행 환경. 필요한 기능만 켠다.
+tokio = { version = "1", features = ["rt-multi-thread"] }
 
 [lib]
 crate-type = ["cdylib", "lib"]
