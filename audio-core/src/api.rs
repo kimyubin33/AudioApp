@@ -206,6 +206,19 @@ pub fn list_contents_path(limit: u32, cursor: Option<String>) -> Result<String, 
     }
 }
 
+/// 차단 요청 주소를 만든다. (`PUT`/`DELETE`)
+pub(crate) fn block_path(creator_id: &str) -> Result<String, ApiError> {
+    if !is_valid_id(creator_id) {
+        return Err(ApiError::InvalidRequest);
+    }
+    Ok(format!("/v1/blocks/{creator_id}"))
+}
+
+/// Google ID 토큰으로 보낼 수 있는 값인가: 출력 가능한 ASCII만, 최대 4096바이트. (JWT는 이 범위에 든다)
+pub(crate) fn is_valid_id_token(token: &str) -> bool {
+    !token.is_empty() && token.len() <= TOKEN_MAX_BYTES && token.chars().all(|c| c.is_ascii_graphic())
+}
+
 /// 상세 요청 주소를 만든다.
 #[uniffi::export]
 pub fn content_detail_path(id: String) -> Result<String, ApiError> {
@@ -326,6 +339,16 @@ mod tests {
         }
         let long = format!(r#"{{"access_token":"{}","expires_in_seconds":3600}}"#, "a".repeat(TOKEN_MAX_BYTES + 1));
         assert_eq!(parse_session(long), Err(ApiError::InvalidResponse));
+    }
+
+    #[test]
+    fn block_path_and_id_token_rules() {
+        assert_eq!(block_path("creator_02").unwrap(), "/v1/blocks/creator_02");
+        assert_eq!(block_path("../admin"), Err(ApiError::InvalidRequest));
+        assert!(is_valid_id_token("eyJhbGciOi.abc_DEF-1.xyz"));
+        assert!(!is_valid_id_token(""));
+        assert!(!is_valid_id_token("has space"));
+        assert!(!is_valid_id_token(&"a".repeat(TOKEN_MAX_BYTES + 1)));
     }
 
     #[test]

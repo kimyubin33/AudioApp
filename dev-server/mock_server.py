@@ -48,7 +48,33 @@ CONTENTS = [
         "ai_tool": None,
         "stream_url": f"{STREAM_BASE}/Jazz_In_Paris.mp3",
     },
+    {
+        "id": "sample-3",
+        "title": "다른 크리에이터의 소리",
+        "creator_id": "creator_02",
+        "kind": "audio",
+        "duration_seconds": 200,
+        "ai_generated": True,
+        "ai_tool": "Udio",
+        "stream_url": f"{STREAM_BASE}/play.mp3",
+    },
 ]
+
+# 개발용 로그인: 이 ID 토큰으로만 로그인할 수 있고, 발급되는 접근 토큰도 고정값이다.
+# (실제 서버는 Google 공개키로 ID 토큰을 검증하고 사용자마다 다른 토큰을 발급한다)
+DEV_ID_TOKEN = "dev-id-token"
+DEV_ACCESS_TOKEN = "dev-access-token"
+REPORT_REASONS = {"spam", "inappropriate", "copyright", "missing_ai_label", "other"}
+ID_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+MAX_BODY = 64 * 1024
+
+# 서버를 다시 켜면 초기화되는 메모리 저장소
+BLOCKED = set()
+REPORTS = []
+
+
+def valid_id(value):
+    return isinstance(value, str) and 1 <= len(value) <= 64 and set(value) <= ID_CHARS
 
 
 def summary(item):
@@ -141,6 +167,77 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def send_empty(self, status):
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def is_authed(self):
+        return self.headers.get("Authorization") == f"Bearer {DEV_ACCESS_TOKEN}"
+
+    def read_json(self):
+        """본문을 JSON 객체로 읽는다. 너무 크거나 올바르지 않으면 None."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= MAX_BODY:
+                return None
+            data = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return data if isinstance(data, dict) else None
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        body = self.read_json()
+
+        if path == "/v1/auth/google":
+            if body is None or body.get("id_token") != DEV_ID_TOKEN:
+                return self.send_json(401, {"error": "unauthorized"})
+            return self.send_json(200, {"access_token": DEV_ACCESS_TOKEN, "expires_in_seconds": 3600})
+
+        if path == "/v1/reports":
+            if not self.is_authed():
+                return self.send_json(401, {"error": "unauthorized"})
+            detail = None if body is None else body.get("detail")
+            valid = (
+                body is not None
+                and valid_id(body.get("content_id"))
+                and body.get("reason") in REPORT_REASONS
+                and (detail is None or (isinstance(detail, str) and 1 <= len(detail) <= 500))
+                and not (body.get("reason") == "other" and not detail)
+            )
+            if not valid:
+                return self.send_json(400, {"error": "invalid_request"})
+            REPORTS.append((body["content_id"], body["reason"]))
+            print(f"  신고 접수: {body['content_id']} / {body['reason']}  (총 {len(REPORTS)}건)")
+            return self.send_empty(204)
+
+        self.send_json(404, {"error": "not_found"})
+
+    def do_PUT(self):
+        path = urlparse(self.path).path
+        if path.startswith("/v1/blocks/"):
+            if not self.is_authed():
+                return self.send_json(401, {"error": "unauthorized"})
+            creator_id = path.removeprefix("/v1/blocks/")
+            if not valid_id(creator_id):
+                return self.send_json(400, {"error": "invalid_request"})
+            BLOCKED.add(creator_id)  # 이미 차단 상태여도 204
+            return self.send_empty(204)
+        self.send_json(404, {"error": "not_found"})
+
+    def do_DELETE(self):
+        path = urlparse(self.path).path
+        if path.startswith("/v1/blocks/"):
+            if not self.is_authed():
+                return self.send_json(401, {"error": "unauthorized"})
+            creator_id = path.removeprefix("/v1/blocks/")
+            if not valid_id(creator_id):
+                return self.send_json(400, {"error": "invalid_request"})
+            BLOCKED.discard(creator_id)
+            return self.send_empty(204)
+        self.send_json(404, {"error": "not_found"})
+
     def do_GET(self):
         url = urlparse(self.path)
         query = parse_qs(url.query)
@@ -154,12 +251,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json(400, {"error": "invalid_request"})
             if not 1 <= limit <= 50 or start < 0:
                 return self.send_json(400, {"error": "invalid_request"})
-            page = CONTENTS[start:start + limit]
-            more = start + limit < len(CONTENTS)
+            # 로그인한 사용자가 차단한 크리에이터의 콘텐츠는 목록에서 뺀다
+            visible = [c for c in CONTENTS if not (self.is_authed() and c["creator_id"] in BLOCKED)]
+            page = visible[start:start + limit]
+            more = start + limit < len(visible)
             return self.send_json(200, {
                 "items": [summary(c) for c in page],
                 "next_cursor": f"p{start + limit}" if more else None,
             })
+
+        if url.path == "/v1/blocks":
+            if not self.is_authed():
+                return self.send_json(401, {"error": "unauthorized"})
+            return self.send_json(200, {"creator_ids": sorted(BLOCKED)})
 
         if url.path.startswith("/v1/contents/"):
             content_id = url.path.removeprefix("/v1/contents/")

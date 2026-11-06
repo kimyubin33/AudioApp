@@ -100,9 +100,59 @@ pub fn create_block(
     Ok(Block { target_creator_id })
 }
 
+/// 서버에 보낼 사유 이름 (docs/api-v1.md)
+fn reason_wire(reason: ReportReason) -> &'static str {
+    match reason {
+        ReportReason::Spam => "spam",
+        ReportReason::Inappropriate => "inappropriate",
+        ReportReason::Copyright => "copyright",
+        ReportReason::MissingAiLabel => "missing_ai_label",
+        ReportReason::Other => "other",
+    }
+}
+
+/// `POST /v1/reports` 요청 본문. 신고자는 토큰으로 서버가 식별하므로 본문에 넣지 않는다.
+pub(crate) fn report_to_json(report: &Report) -> String {
+    serde_json::json!({
+        "content_id": report.content_id,
+        "reason": reason_wire(report.reason),
+        "detail": report.detail,
+    })
+    .to_string()
+}
+
+/// 차단할 크리에이터 id 검증. (자기 자신 차단 여부는 서버가 판단한다. 앱은 자기 크리에이터 id를 모를 수 있다)
+pub(crate) fn validate_block_target(creator_id: &str) -> Result<(), ModerationError> {
+    if is_valid_id(creator_id) {
+        Ok(())
+    } else {
+        Err(ModerationError::InvalidCreatorId)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn report_json_shape() {
+        let r = create_report("c_1".into(), ReportReason::MissingAiLabel, Some("표시 없음".into())).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&report_to_json(&r)).unwrap();
+        assert_eq!(v["content_id"], "c_1");
+        assert_eq!(v["reason"], "missing_ai_label");
+        assert_eq!(v["detail"], "표시 없음");
+        // 설명이 없으면 null
+        let r = create_report("c_1".into(), ReportReason::Spam, None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&report_to_json(&r)).unwrap();
+        assert!(v["detail"].is_null());
+    }
+
+    #[test]
+    fn block_target_validation() {
+        assert!(validate_block_target("creator_02").is_ok());
+        assert!(validate_block_target("../x").is_err());
+        assert!(validate_block_target("").is_err());
+    }
 
     #[test]
     fn valid_report() {

@@ -8,12 +8,14 @@ use std::net::Ipv4Addr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use reqwest::header::{ACCEPT, AUTHORIZATION, HeaderValue};
+use reqwest::Method;
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 
 use crate::api::{
-    ApiError, ContentDetail, ContentPage, MAX_BODY_BYTES, content_detail_path, list_contents_path,
-    parse_content_detail, parse_content_page,
+    ApiError, ContentDetail, ContentPage, MAX_BODY_BYTES, block_path, content_detail_path, is_valid_id_token,
+    list_contents_path, parse_content_detail, parse_content_page, parse_session,
 };
+use crate::moderation::{ReportReason, create_report, report_to_json, validate_block_target};
 
 const URL_MAX_CHARS: usize = 2048;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -232,38 +234,108 @@ impl ApiClient {
     /// 콘텐츠 목록 한 페이지를 가져온다. (로그인 없이도 가능, 로그인돼 있으면 토큰을 함께 보낸다)
     pub async fn list_contents(&self, limit: u32, cursor: Option<String>) -> Result<ContentPage, NetError> {
         let path = list_contents_path(limit, cursor)?;
-        let body = self.get_text(&path).await?;
+        let body = self.request(Method::GET, &path, None, Auth::Optional).await?;
         Ok(parse_content_page(body)?)
     }
 
     /// 콘텐츠 한 건의 상세와 재생 주소를 가져온다.
     pub async fn content_detail(&self, id: String) -> Result<ContentDetail, NetError> {
         let path = content_detail_path(id)?;
-        let body = self.get_text(&path).await?;
+        let body = self.request(Method::GET, &path, None, Auth::Optional).await?;
         Ok(parse_content_detail(body)?)
+    }
+
+    /// Google ID 토큰을 서버에 보내 로그인한다. 성공하면 받은 토큰을 토큰 보관소(Keystore)에 저장한다.
+    pub async fn sign_in_with_google(&self, id_token: String) -> Result<(), NetError> {
+        if !is_valid_id_token(&id_token) {
+            return Err(NetError::InvalidRequest);
+        }
+        let body = serde_json::json!({ "id_token": id_token }).to_string();
+        // 로그인 요청에는 기존 토큰을 실어 보내지 않는다
+        let response = self.request(Method::POST, "/v1/auth/google", Some(body), Auth::None).await?;
+        let session = parse_session(response)?;
+        self.tokens.save_token(session.access_token)?;
+        Ok(())
+    }
+
+    /// 콘텐츠를 신고한다. (로그인 필요: 토큰이 없으면 요청을 보내지 않고 `Unauthorized`)
+    pub async fn report_content(
+        &self,
+        content_id: String,
+        reason: ReportReason,
+        detail: Option<String>,
+    ) -> Result<(), NetError> {
+        let report = create_report(content_id, reason, detail).map_err(|_| NetError::InvalidRequest)?;
+        self.request(Method::POST, "/v1/reports", Some(report_to_json(&report)), Auth::Required)
+            .await?;
+        Ok(())
+    }
+
+    /// 크리에이터를 차단한다. (로그인 필요) 차단된 크리에이터의 콘텐츠는 서버가 목록에서 뺀다.
+    pub async fn block_creator(&self, creator_id: String) -> Result<(), NetError> {
+        validate_block_target(&creator_id).map_err(|_| NetError::InvalidRequest)?;
+        let path = block_path(&creator_id)?;
+        self.request(Method::PUT, &path, None, Auth::Required).await?;
+        Ok(())
+    }
+
+    /// 차단을 푼다. (로그인 필요)
+    pub async fn unblock_creator(&self, creator_id: String) -> Result<(), NetError> {
+        validate_block_target(&creator_id).map_err(|_| NetError::InvalidRequest)?;
+        let path = block_path(&creator_id)?;
+        self.request(Method::DELETE, &path, None, Auth::Required).await?;
+        Ok(())
     }
 }
 
+/// 요청에 로그인 토큰을 어떻게 쓸지
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Auth {
+    /// 토큰을 보내지 않는다 (로그인 요청 자체)
+    None,
+    /// 토큰이 있으면 보낸다 (목록·상세처럼 로그인 없이도 되는 요청)
+    Optional,
+    /// 토큰이 꼭 필요하다. 없으면 요청을 보내지 않고 `Unauthorized`
+    Required,
+}
+
 impl ApiClient {
-    /// GET 요청을 보내고 본문을 문자열로 돌려준다. 본문 크기는 [`MAX_BODY_BYTES`]로 제한한다.
-    async fn get_text(&self, path: &str) -> Result<String, NetError> {
+    /// 요청을 보내고 본문을 문자열로 돌려준다. (204처럼 본문이 없으면 빈 문자열)
+    /// 본문 크기는 [`MAX_BODY_BYTES`]로 제한한다.
+    async fn request(&self, method: Method, path: &str, body: Option<String>, auth: Auth) -> Result<String, NetError> {
         let url = self.base_url.join(path).map_err(|_| NetError::InvalidRequest)?;
         // 경로 때문에 다른 서버로 가게 되는 일이 없도록 한 번 더 확인
         if url.scheme() != "https" || url.host_str() != self.base_url.host_str() || url.port() != self.base_url.port() {
             return Err(NetError::InvalidRequest);
         }
 
-        let mut request = self.http.get(url).header(ACCEPT, "application/json");
-        if let Some(token) = self.tokens.load_token()? {
-            // 토큰이 헤더 규칙에 맞지 않으면 보내지 않는다 (로그인 없는 요청으로 처리)
-            if let Ok(mut value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                value.set_sensitive(true); // 디버그 출력에 값이 나오지 않게 표시
-                request = request.header(AUTHORIZATION, value);
+        let mut request = self.http.request(method, url).header(ACCEPT, "application/json");
+        if let Some(body) = body {
+            request = request.header(CONTENT_TYPE, "application/json").body(body);
+        }
+
+        let mut sent_token = false;
+        if auth != Auth::None {
+            if let Some(token) = self.tokens.load_token()? {
+                // 토큰이 헤더 규칙에 맞지 않으면 보내지 않는다
+                if let Ok(mut value) = HeaderValue::from_str(&format!("Bearer {token}")) {
+                    value.set_sensitive(true); // 디버그 출력에 값이 나오지 않게 표시
+                    request = request.header(AUTHORIZATION, value);
+                    sent_token = true;
+                }
+            }
+            if auth == Auth::Required && !sent_token {
+                return Err(NetError::Unauthorized);
             }
         }
 
         let mut response = request.send().await.map_err(|_| NetError::Network)?;
-        check_status(response.status().as_u16())?;
+        let status = response.status().as_u16();
+        if status == 401 && sent_token {
+            // 토큰이 만료·폐기됐다: 더 쓰지 않도록 지운다 (실패해도 요청 결과는 그대로 알린다)
+            let _ = self.tokens.clear_token();
+        }
+        check_status(status)?;
 
         if response.content_length().is_some_and(|n| n > MAX_BODY_BYTES as u64) {
             return Err(NetError::InvalidResponse);
@@ -388,6 +460,54 @@ mod tests {
             let page = client.list_contents(1, None).await;
             println!("list_contents: {page:?}");
             assert!(page.is_ok());
+
+            // 로그인·신고·차단 전체 흐름 (목업 서버는 개발용 ID 토큰 'dev-id-token' 만 받는다)
+            assert_eq!(client.has_session(), Ok(false));
+            assert_eq!(client.block_creator("creator_02".into()).await, Err(NetError::Unauthorized));
+            assert_eq!(client.sign_in_with_google("wrong-token".into()).await, Err(NetError::Unauthorized));
+            client.sign_in_with_google("dev-id-token".into()).await.unwrap();
+            assert_eq!(client.has_session(), Ok(true));
+
+            client
+                .report_content("sample-3".into(), ReportReason::MissingAiLabel, Some("테스트".into()))
+                .await
+                .unwrap();
+
+            let ids = |p: ContentPage| p.items.into_iter().map(|i| i.id).collect::<Vec<_>>();
+            let before = ids(client.list_contents(20, None).await.unwrap());
+            assert!(before.contains(&"sample-3".to_string()));
+            client.block_creator("creator_02".into()).await.unwrap();
+            let after = ids(client.list_contents(20, None).await.unwrap());
+            assert!(!after.contains(&"sample-3".to_string()), "차단한 크리에이터의 곡이 목록에 남아 있음");
+            client.unblock_creator("creator_02".into()).await.unwrap();
+            let restored = ids(client.list_contents(20, None).await.unwrap());
+            assert!(restored.contains(&"sample-3".to_string()));
+
+            client.sign_out().unwrap();
+            println!("로그인·신고·차단 흐름 모두 성공");
+        });
+    }
+
+    /// 로그인이 필요한 동작은 토큰이 없으면 네트워크로 나가기 전에 거부되고, 잘못된 입력은 토큰 확인 전에 거부된다.
+    /// (주소는 연결될 수 없는 .invalid 이라서 실수로 나가도 아무 일도 일어나지 않는다)
+    #[test]
+    fn login_required_actions_are_refused_locally() {
+        let client = ApiClient::new("https://api.example.invalid".into(), store(), None).unwrap();
+        let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        runtime.block_on(async {
+            assert_eq!(client.block_creator("creator_02".into()).await, Err(NetError::Unauthorized));
+            assert_eq!(client.unblock_creator("creator_02".into()).await, Err(NetError::Unauthorized));
+            assert_eq!(
+                client.report_content("c_1".into(), ReportReason::Spam, None).await,
+                Err(NetError::Unauthorized)
+            );
+            // 입력 검증이 먼저다
+            assert_eq!(client.block_creator("../x".into()).await, Err(NetError::InvalidRequest));
+            assert_eq!(
+                client.report_content("c_1".into(), ReportReason::Other, None).await,
+                Err(NetError::InvalidRequest)
+            );
+            assert_eq!(client.sign_in_with_google("bad token".into()).await, Err(NetError::InvalidRequest));
         });
     }
 
