@@ -1,5 +1,7 @@
 uniffi::setup_scaffolding!();
 
+mod content;
+
 /// Kotlin에서 부를 첫 번째 함수
 #[uniffi::export]
 pub fn greet(name: String) -> String {
