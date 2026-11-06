@@ -8,6 +8,10 @@ android/app/src/main/java/uniffi/
 # Android Studio 개인 설정
 android/.idea/
 
+# 개발용 목업 서버의 인증서와 개인키 (dev-server/mock_server.py 가 만든다)
+dev-server/certs/
+android/app/src/debug/res/raw/dev_ca.pem
+
 # 비밀값 (실수로 올라가지 않도록)
 *.jks
 *.keystore

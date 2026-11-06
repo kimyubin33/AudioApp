@@ -11,7 +11,7 @@ use crate::net::validate_stream_url;
 use crate::validation::{is_valid_cursor, is_valid_id};
 
 /// 응답 본문 최대 크기. 이보다 크면 읽지 않는다 (메모리 낭비 방지).
-const MAX_BODY_BYTES: usize = 1024 * 1024;
+pub(crate) const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_PAGE_ITEMS: usize = 100;
 const MAX_LIMIT: u32 = 50;
 const TOKEN_MAX_BYTES: usize = 4096;

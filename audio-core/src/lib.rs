@@ -4,6 +4,7 @@ mod api;
 mod content;
 mod moderation;
 mod net;
+mod tls;
 mod validation;
 
 /// Kotlin에서 부를 첫 번째 함수

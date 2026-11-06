@@ -21,7 +21,13 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 개발용 목업 서버 (dev-server/mock_server.py). 에뮬레이터에서 PC는 10.0.2.2 로 보인다.
+            buildConfigField("String", "API_BASE_URL", "\"https://10.0.2.2:8443\"")
+        }
         release {
+            // 실제 서버가 생기기 전까지는 연결될 수 없는 예약 주소(.invalid)를 둔다.
+            buildConfigField("String", "API_BASE_URL", "\"https://api.example.invalid\"")
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
@@ -34,6 +40,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
