@@ -28,9 +28,11 @@ android {
         release {
             // 실제 서버가 생기기 전까지는 연결될 수 없는 예약 주소(.invalid)를 둔다.
             buildConfigField("String", "API_BASE_URL", "\"https://api.example.invalid\"")
+            // R8 축소·최적화. 템플릿의 packageScope(라이브러리 패키지만 처리)는 실행 시작 중
+            // IllegalAccessError(kotlin.collections.* 접근 불가)를 일으켜 빼고, 앱 전체를 일관되게 처리한다.
+            // UniFFI·JNA처럼 이름으로 접근하는 코드는 src/main/keepRules/rules.keep 에서 지키는 규칙을 둔다.
             optimization {
                 enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
             }
         }
     }

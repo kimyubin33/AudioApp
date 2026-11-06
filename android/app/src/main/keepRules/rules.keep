@@ -1,12 +1,13 @@
-# Add project specific R8 rules here.
 # AGP will combine all keep rule files in src/main/keepRules to pass to R8
 #
 # For more details, see
 #   https://d.android.com/r/tools/r8/keep-rules
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# ── Rust 코어 연결 (UniFFI + JNA) ─────────────────────────────────────────────
+# JNA는 네이티브 함수·구조체 필드를 이름(리플렉션)으로 찾는다. 이름이 바뀌거나 지워지면 실행 중 죽는다.
+-keep class com.sun.jna.** { *; }
+-keep class * implements com.sun.jna.** { *; }
+-dontwarn java.awt.**
+
+# UniFFI가 만든 Kotlin 바인딩(콜백 인터페이스, 구조체, 오류 클래스)도 JNA가 이름으로 접근한다.
+-keep class uniffi.** { *; }
