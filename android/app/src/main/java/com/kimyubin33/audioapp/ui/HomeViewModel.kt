@@ -3,6 +3,7 @@ package com.kimyubin33.audioapp.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kimyubin33.audioapp.data.AccountActions
 import com.kimyubin33.audioapp.data.AudioApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +15,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.audio_core.ContentDetail
 import uniffi.audio_core.NetException
+import uniffi.audio_core.ReportReason
 
 /** 홈 화면이 그리는 상태. */
 data class HomeUiState(
@@ -33,6 +35,8 @@ fun userMessage(e: Throwable): String = when (e) {
     is NetException.RateLimited -> "요청이 많습니다. 잠시 후 다시 시도해 주세요."
     is NetException.ServerException -> "서버에 문제가 있습니다. 잠시 후 다시 시도해 주세요."
     is NetException.NotFound -> "찾을 수 없는 항목입니다."
+    is NetException.Unauthorized -> "로그인이 필요합니다."
+    is NetException.InvalidRequest -> "입력을 확인해 주세요."
     else -> "불러오지 못했습니다. 다시 시도해 주세요."
 }
 
@@ -52,6 +56,19 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.loading) return
         load(reset = _state.value.items.isEmpty())
     }
+
+    /** 목록을 처음부터 다시 불러온다. (차단·차단 해제 결과를 반영) */
+    fun refresh() {
+        if (_state.value.loading) return
+        load(reset = true)
+    }
+
+    /** 콘텐츠를 신고한다. 실패하면 예외를 던진다. */
+    suspend fun report(contentId: String, reason: ReportReason, detail: String?) =
+        AccountActions.report(getApplication(), contentId, reason, detail)
+
+    /** 크리에이터를 차단한다. 실패하면 예외를 던진다. */
+    suspend fun block(creatorId: String) = AccountActions.block(getApplication(), creatorId)
 
     fun loadMore() {
         val s = _state.value

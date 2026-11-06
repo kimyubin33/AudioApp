@@ -1,5 +1,6 @@
 package com.kimyubin33.audioapp.ui
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -9,6 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.media3.common.Player
 import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
@@ -19,6 +21,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import uniffi.audio_core.ContentDetail
+import uniffi.audio_core.ReportReason
+
+/** 플레이어 화면에서 띄우는 창 */
+private enum class ModerationDialog { Report, Block }
 
 // 화면 주소. 직렬화가 가능해야 화면 회전·프로세스 종료 뒤에도 이동 상태가 복원된다.
 // 플레이어 화면은 목록 없이도 그려질 수 있도록 표시에 필요한 값을 함께 가진다.
@@ -42,6 +48,12 @@ fun AppNavigation(
     onLoadMore: () -> Unit,
     /** 곡 상세(재생 주소 포함)를 서버에서 가져온다. 실패하면 예외를 던진다. */
     loadDetail: suspend (String) -> ContentDetail,
+    /** 신고한다. 실패하면 예외를 던진다. (콘텐츠 id, 사유, 설명) */
+    onReport: suspend (String, ReportReason, String?) -> Unit,
+    /** 크리에이터를 차단한다. 실패하면 예외를 던진다. */
+    onBlock: suspend (String) -> Unit,
+    /** 목록을 처음부터 다시 불러온다 (차단 결과를 반영) */
+    onRefresh: () -> Unit,
     onPlayRequested: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -123,12 +135,72 @@ fun AppNavigation(
                 }
 
                 is PlayerRoute -> NavEntry(key) {
+                    val context = LocalContext.current
+                    var dialog by remember { mutableStateOf<ModerationDialog?>(null) }
+                    var submitting by remember { mutableStateOf(false) }
+
+                    fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+
                     PlayerScreen(
                         player = player,
                         title = key.title,
                         creator = key.creator,
                         aiGenerated = key.aiGenerated,
+                        onReport = { dialog = ModerationDialog.Report },
+                        onBlock = { dialog = ModerationDialog.Block },
                     )
+
+                    when (dialog) {
+                        ModerationDialog.Report -> ReportDialog(
+                            submitting = submitting,
+                            onDismiss = { dialog = null },
+                            onSubmit = { reason, detail ->
+                                submitting = true
+                                scope.launch {
+                                    try {
+                                        onReport(key.trackId, reason, detail)
+                                        dialog = null
+                                        toast("신고가 접수되었습니다.")
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        toast(userMessage(e)) // 창은 열어 둬서 다시 시도할 수 있게 한다
+                                    } finally {
+                                        submitting = false
+                                    }
+                                }
+                            },
+                        )
+
+                        ModerationDialog.Block -> BlockDialog(
+                            creator = key.creator,
+                            submitting = submitting,
+                            onDismiss = { dialog = null },
+                            onConfirm = {
+                                submitting = true
+                                scope.launch {
+                                    try {
+                                        onBlock(key.creator)
+                                        dialog = null
+                                        // 차단한 크리에이터의 곡을 더 이어 재생하지 않고, 목록을 새로 불러온다
+                                        player.stop()
+                                        player.clearMediaItems()
+                                        toast("차단했습니다.")
+                                        backStack.removeLastOrNull()
+                                        onRefresh()
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        toast(userMessage(e))
+                                    } finally {
+                                        submitting = false
+                                    }
+                                }
+                            },
+                        )
+
+                        null -> Unit
+                    }
                 }
 
                 else -> error("알 수 없는 화면: $key")

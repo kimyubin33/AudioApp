@@ -58,6 +58,9 @@ class MainActivity : ComponentActivity() {
                             onRetry = homeViewModel::retry,
                             onLoadMore = homeViewModel::loadMore,
                             loadDetail = homeViewModel::loadDetail,
+                            onReport = homeViewModel::report,
+                            onBlock = homeViewModel::block,
+                            onRefresh = homeViewModel::refresh,
                             onPlayRequested = ::requestNotificationPermissionIfNeeded,
                             modifier = Modifier
                                 .fillMaxSize()

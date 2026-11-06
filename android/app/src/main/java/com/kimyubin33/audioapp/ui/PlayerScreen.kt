@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +51,8 @@ fun PlayerScreen(
     title: String,
     creator: String,
     aiGenerated: Boolean,
+    onReport: () -> Unit,
+    onBlock: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isPlaying by remember { mutableStateOf(player.isPlaying) }
@@ -92,6 +95,8 @@ fun PlayerScreen(
             positionMs = ms
             player.seekTo(ms)
         },
+        onReport = onReport,
+        onBlock = onBlock,
         modifier = modifier,
     )
 }
@@ -107,6 +112,8 @@ fun PlayerContent(
     durationMs: Long,
     onTogglePlay: () -> Unit,
     onSeekTo: (Long) -> Unit,
+    onReport: () -> Unit,
+    onBlock: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -167,6 +174,15 @@ fun PlayerContent(
         Spacer(Modifier.height(32.dp))
 
         PlayPauseButton(isPlaying = isPlaying, onClick = onTogglePlay)
+
+        Spacer(Modifier.height(48.dp))
+
+        // 신고·차단은 눈에 띄지 않게, 하지만 언제든 찾을 수 있게 아래쪽에 둔다
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            val color = MaterialTheme.colorScheme.onSurfaceVariant
+            TextButton(onClick = onReport) { Text("신고", color = color) }
+            TextButton(onClick = onBlock) { Text("크리에이터 차단", color = color) }
+        }
     }
 }
 
@@ -230,6 +246,8 @@ private fun PlayerContentPreview() {
             durationMs = 225_000,
             onTogglePlay = {},
             onSeekTo = {},
+            onReport = {},
+            onBlock = {},
         )
     }
 }
