@@ -97,6 +97,27 @@
 - `GET /v1/blocks` → `{ "creator_ids": ["creator_02"] }`
 - 자기 자신은 차단할 수 없습니다 (`400`).
 
+### 업로드 (승인된 크리에이터만, 앱·웹 공통)
+
+자세한 흐름은 `docs/server-plan.md`. 서버는 매번 **크리에이터 권한과 모든 값**을 검증합니다. 권한이 없으면 `403`.
+
+- `POST /v1/uploads` → `201`
+  ```json
+  { "title": "첫 번째 곡", "kind": "audio", "duration_seconds": 225,
+    "ai_generated": true, "ai_tool": "Suno", "content_type": "audio/mpeg" }
+  ```
+  값 규칙은 위 표와 같습니다. `content_type`은 허용 목록(`audio/mpeg`, `audio/mp4`, `video/mp4` 등)만 통과합니다.
+  응답: `{ "upload_id": "u_123", "upload_url": "https://...(서명, 만료)", "expires_in_seconds": 900, "max_bytes": 209715200 }`
+- 클라이언트가 `upload_url`로 파일을 `PUT` 합니다 (크기 상한 `max_bytes`).
+- `POST /v1/uploads/{upload_id}/complete` → `204`. 서버가 파일을 확인하고 콘텐츠를 `pending`(검수 대기)으로 둡니다.
+- `GET /v1/me/contents` → 내가 올린 콘텐츠와 상태
+  ```json
+  { "items": [ { "id": "c_9", "title": "...", "status": "pending" } ] }
+  ```
+  `status`: `pending`(검수 대기) | `approved`(공개) | `rejected`(반려, `reject_reason` 포함) | `removed`(신고 등으로 내려감)
+
+목록·상세(`/v1/contents`)에는 **`approved`만** 나옵니다.
+
 ## 오류 응답
 
 상태 코드로 구분하고, 본문은 사람이 읽는 설명 없이 짧은 코드만 둡니다 (내부 정보 노출 방지).
@@ -117,6 +138,6 @@
 ## 아직 정하지 않은 것
 
 - **토큰 갱신:** 지금은 `access_token` 하나와 만료 시간만 있습니다. 만료되면 다시 Google 로그인으로 새 세션을 받는 단순한 방식입니다. 로그인을 자주 요구하는 게 부담이면 `refresh_token`을 추가합니다.
-- **크리에이터 업로드 API:** 승인된 크리에이터가 어떤 경로(앱 안인지, 별도 웹 도구인지)로 올리는지 정해지면 추가합니다.
+- **업로드 상세:** 위 흐름은 초안입니다. 파일 크기 상한, 허용 형식, 동영상 변환(재인코딩) 여부는 서버를 만들면서 확정합니다.
 - **차단 목록의 반영 방식:** 서버가 목록에서 빼는 것으로 정했습니다. 재생 직접 주소로 접근하는 경우의 처리는 서버 구현 때 정합니다.
 - **한국 법규:** 신고 처리, 저작권 침해 대응 절차는 서비스 시작 전에 따로 확인이 필요합니다.
