@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -34,7 +35,14 @@ data class HomeItem(
 @Composable
 fun HomeScreen(
     items: List<HomeItem>,
+    loading: Boolean,
+    error: String?,
+    hasMore: Boolean,
+    /** 곡을 열다 실패했을 때 등, 잠깐 알려줄 문구 */
+    notice: String?,
     onOpen: (String) -> Unit,
+    onRetry: () -> Unit,
+    onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -47,43 +55,109 @@ fun HomeScreen(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            Spacer(Modifier.height(40.dp))
+            Spacer(Modifier.height(if (notice == null) 40.dp else 16.dp))
         }
-        items(items, key = { it.id }) { item ->
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(role = Role.Button) { onOpen(item.id) },
-            ) {
-                Column(modifier = Modifier.padding(vertical = 24.dp)) {
-                    Text(
-                        text = item.title,
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Light,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = if (item.aiGenerated) "${item.creator} · AI 생성" else item.creator,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+        if (notice != null) {
+            item {
+                Text(
+                    text = notice,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(Modifier.height(24.dp))
+            }
+        }
+
+        if (items.isEmpty()) {
+            // 목록이 비어 있을 때: 불러오는 중이거나, 실패했거나
+            item {
+                when {
+                    error != null -> StatusMessage(message = error, actionLabel = "다시 시도", onAction = onRetry)
+                    loading -> StatusMessage(message = "불러오는 중...")
+                    else -> StatusMessage(message = "아직 올라온 곡이 없습니다.")
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+            }
+        } else {
+            items(items, key = { it.id }) { item ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(role = Role.Button) { onOpen(item.id) },
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 24.dp)) {
+                        Text(
+                            text = item.title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Light,
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = if (item.aiGenerated) "${item.creator} · AI 생성" else item.creator,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                }
+            }
+            // 목록 끝: 더 불러오는 중이거나, 실패했거나, 더 있거나
+            item {
+                when {
+                    loading -> StatusMessage(message = "불러오는 중...")
+                    error != null -> StatusMessage(message = error, actionLabel = "다시 시도", onAction = onRetry)
+                    hasMore -> StatusMessage(message = null, actionLabel = "더 보기", onAction = onLoadMore)
+                }
             }
         }
     }
 }
+
+@Composable
+private fun StatusMessage(
+    message: String?,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: () -> Unit = {},
+) {
+    Column(modifier = modifier.fillMaxWidth().padding(vertical = 24.dp)) {
+        if (message != null) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (actionLabel != null) {
+            TextButton(onClick = onAction) {
+                Text(actionLabel, color = MaterialTheme.colorScheme.onSurface)
+            }
+        }
+    }
+}
+
+private val previewItems = listOf(
+    HomeItem("1", "샘플 오디오 하나", "creator_01", true),
+    HomeItem("2", "파리의 재즈", "creator_01", true),
+)
 
 @Preview(showBackground = true)
 @Composable
 private fun HomeScreenPreview() {
     AudioAppTheme {
         HomeScreen(
-            items = listOf(
-                HomeItem("1", "샘플 오디오 하나", "creator_01", true),
-                HomeItem("2", "파리의 재즈", "creator_01", true),
-            ),
-            onOpen = {},
+            items = previewItems, loading = false, error = null, hasMore = true, notice = null,
+            onOpen = {}, onRetry = {}, onLoadMore = {},
+        )
+    }
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun HomeScreenErrorPreview() {
+    AudioAppTheme {
+        HomeScreen(
+            items = emptyList(), loading = false, error = "서버에 연결할 수 없습니다. 연결을 확인해 주세요.",
+            hasMore = false, notice = null, onOpen = {}, onRetry = {}, onLoadMore = {},
         )
     }
 }

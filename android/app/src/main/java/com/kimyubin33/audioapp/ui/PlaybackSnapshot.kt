@@ -9,7 +9,11 @@ import androidx.media3.common.Player
 
 /** 지금 어떤 곡이 로드돼 있고 재생 중인지. 홈의 미니 플레이어가 이걸 보고 그려진다. */
 data class PlaybackSnapshot(
+    /** 로드된 곡이 없으면 null */
     val mediaId: String?,
+    val title: String,
+    val creatorId: String,
+    val aiGenerated: Boolean,
     val isPlaying: Boolean,
 )
 
@@ -29,10 +33,17 @@ fun rememberPlaybackSnapshot(player: Player): State<PlaybackSnapshot> {
     return state
 }
 
-private fun Player.snapshot() = PlaybackSnapshot(
-    mediaId = currentMediaItem?.mediaId,
-    // 버퍼링 중에도 "재생 중"으로 보여서 버튼이 깜빡이지 않게 한다
-    isPlaying = playWhenReady &&
-        playbackState != Player.STATE_IDLE &&
-        playbackState != Player.STATE_ENDED,
-)
+private fun Player.snapshot(): PlaybackSnapshot {
+    val item = currentMediaItem
+    val metadata = item?.mediaMetadata
+    return PlaybackSnapshot(
+        mediaId = item?.mediaId?.takeIf { it.isNotEmpty() },
+        title = metadata?.title?.toString().orEmpty(),
+        creatorId = metadata?.extras?.getString(EXTRA_CREATOR_ID).orEmpty(),
+        aiGenerated = metadata?.extras?.getBoolean(EXTRA_AI_GENERATED, false) ?: false,
+        // 버퍼링 중에도 "재생 중"으로 보여서 버튼이 깜빡이지 않게 한다
+        isPlaying = playWhenReady &&
+            playbackState != Player.STATE_IDLE &&
+            playbackState != Player.STATE_ENDED,
+    )
+}
