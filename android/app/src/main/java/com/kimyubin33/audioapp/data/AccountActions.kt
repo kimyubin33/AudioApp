@@ -24,9 +24,16 @@ object AccountActions {
     suspend fun block(context: Context, creatorId: String) =
         withLogin(context) { it.blockCreator(creatorId) }
 
-    private suspend fun withLogin(context: Context, action: suspend (ApiClient) -> Unit) {
+    suspend fun unblock(context: Context, creatorId: String) =
+        withLogin(context) { it.unblockCreator(creatorId) }
+
+    /** 내가 차단한 크리에이터 id 목록 */
+    suspend fun blockedCreators(context: Context): List<String> =
+        withLogin(context) { it.listBlockedCreators() }
+
+    private suspend fun <T> withLogin(context: Context, action: suspend (ApiClient) -> T): T {
         val api = withContext(Dispatchers.IO) { AudioApi.get(context) }
-        try {
+        return try {
             action(api)
         } catch (e: NetException.Unauthorized) {
             if (!BuildConfig.DEBUG) throw e

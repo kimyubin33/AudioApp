@@ -1,8 +1,10 @@
 package com.kimyubin33.audioapp.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -43,6 +46,7 @@ fun HomeScreen(
     onOpen: (String) -> Unit,
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
+    onOpenBlocked: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -50,12 +54,21 @@ fun HomeScreen(
         contentPadding = PaddingValues(horizontal = 32.dp, vertical = 24.dp),
     ) {
         item {
-            Text(
-                text = stringResource(R.string.app_name),
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(if (notice == null) 40.dp else 16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = stringResource(R.string.app_name),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextButton(onClick = onOpenBlocked) {
+                    Text("차단 관리", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Spacer(Modifier.height(if (notice == null) 32.dp else 8.dp))
         }
         if (notice != null) {
             item {
@@ -146,7 +159,7 @@ private fun HomeScreenPreview() {
     AudioAppTheme {
         HomeScreen(
             items = previewItems, loading = false, error = null, hasMore = true, notice = null,
-            onOpen = {}, onRetry = {}, onLoadMore = {},
+            onOpen = {}, onRetry = {}, onLoadMore = {}, onOpenBlocked = {},
         )
     }
 }
@@ -157,7 +170,7 @@ private fun HomeScreenErrorPreview() {
     AudioAppTheme {
         HomeScreen(
             items = emptyList(), loading = false, error = "서버에 연결할 수 없습니다. 연결을 확인해 주세요.",
-            hasMore = false, notice = null, onOpen = {}, onRetry = {}, onLoadMore = {},
+            hasMore = false, notice = null, onOpen = {}, onRetry = {}, onLoadMore = {}, onOpenBlocked = {},
         )
     }
 }

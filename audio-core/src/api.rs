@@ -14,6 +14,7 @@ use crate::validation::{is_valid_cursor, is_valid_id};
 pub(crate) const MAX_BODY_BYTES: usize = 1024 * 1024;
 const MAX_PAGE_ITEMS: usize = 100;
 const MAX_LIMIT: u32 = 50;
+const MAX_BLOCKED: usize = 1000;
 const TOKEN_MAX_BYTES: usize = 4096;
 const SESSION_MIN_SECONDS: u32 = 60;
 const SESSION_MAX_SECONDS: u32 = 7 * 24 * 60 * 60; // 7일
@@ -109,6 +110,11 @@ struct WireDetail {
 }
 
 #[derive(Deserialize)]
+struct WireBlocked {
+    creator_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
 struct WireSession {
     access_token: String,
     expires_in_seconds: u32,
@@ -191,6 +197,16 @@ pub fn parse_session(body: String) -> Result<Session, ApiError> {
         access_token: wire.access_token,
         expires_in_seconds: wire.expires_in_seconds,
     })
+}
+
+/// `GET /v1/blocks` 응답(차단한 크리에이터 id 목록)을 해석한다.
+#[uniffi::export]
+pub fn parse_blocked_list(body: String) -> Result<Vec<String>, ApiError> {
+    let wire: WireBlocked = parse_json(&body)?;
+    if wire.creator_ids.len() > MAX_BLOCKED || !wire.creator_ids.iter().all(|id| is_valid_id(id)) {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(wire.creator_ids)
 }
 
 /// 목록 요청 주소를 만든다. 커서는 서버가 준 값이라도 안전한 문자만 허용한다.
@@ -339,6 +355,23 @@ mod tests {
         }
         let long = format!(r#"{{"access_token":"{}","expires_in_seconds":3600}}"#, "a".repeat(TOKEN_MAX_BYTES + 1));
         assert_eq!(parse_session(long), Err(ApiError::InvalidResponse));
+    }
+
+    #[test]
+    fn blocked_list_rules() {
+        let ok = parse_blocked_list(r#"{"creator_ids":["creator_02","c-3"]}"#.into()).unwrap();
+        assert_eq!(ok, vec!["creator_02", "c-3"]);
+        assert_eq!(parse_blocked_list(r#"{"creator_ids":[]}"#.into()).unwrap(), Vec::<String>::new());
+        for bad in [
+            r#"{"creator_ids":["../x"]}"#,
+            r#"{"creator_ids":[1]}"#,
+            r#"{}"#,
+            "not json",
+        ] {
+            assert_eq!(parse_blocked_list(bad.into()), Err(ApiError::InvalidResponse), "{bad}");
+        }
+        let many = format!(r#"{{"creator_ids":[{}]}}"#, vec!["\"a\""; MAX_BLOCKED + 1].join(","));
+        assert_eq!(parse_blocked_list(many), Err(ApiError::InvalidResponse));
     }
 
     #[test]

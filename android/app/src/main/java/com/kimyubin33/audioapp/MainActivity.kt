@@ -60,6 +60,8 @@ class MainActivity : ComponentActivity() {
                             loadDetail = homeViewModel::loadDetail,
                             onReport = homeViewModel::report,
                             onBlock = homeViewModel::block,
+                            onUnblock = homeViewModel::unblock,
+                            onLoadBlocked = homeViewModel::blockedCreators,
                             onRefresh = homeViewModel::refresh,
                             onPlayRequested = ::requestNotificationPermissionIfNeeded,
                             modifier = Modifier

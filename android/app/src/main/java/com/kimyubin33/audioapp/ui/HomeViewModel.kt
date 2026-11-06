@@ -70,6 +70,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     /** 크리에이터를 차단한다. 실패하면 예외를 던진다. */
     suspend fun block(creatorId: String) = AccountActions.block(getApplication(), creatorId)
 
+    /** 차단을 푼다. 실패하면 예외를 던진다. */
+    suspend fun unblock(creatorId: String) = AccountActions.unblock(getApplication(), creatorId)
+
+    /** 내가 차단한 크리에이터 목록. 실패하면 예외를 던진다. */
+    suspend fun blockedCreators(): List<String> = AccountActions.blockedCreators(getApplication())
+
     fun loadMore() {
         val s = _state.value
         if (s.loading || s.nextCursor == null) return

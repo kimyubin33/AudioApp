@@ -3,8 +3,10 @@ package com.kimyubin33.audioapp.ui
 import android.widget.Toast
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -32,6 +34,9 @@ private enum class ModerationDialog { Report, Block }
 private data object HomeRoute : NavKey
 
 @Serializable
+private data object BlockedRoute : NavKey
+
+@Serializable
 private data class PlayerRoute(
     val trackId: String,
     val title: String,
@@ -52,6 +57,10 @@ fun AppNavigation(
     onReport: suspend (String, ReportReason, String?) -> Unit,
     /** 크리에이터를 차단한다. 실패하면 예외를 던진다. */
     onBlock: suspend (String) -> Unit,
+    /** 차단을 푼다. 실패하면 예외를 던진다. */
+    onUnblock: suspend (String) -> Unit,
+    /** 내가 차단한 크리에이터 목록을 가져온다. 실패하면 예외를 던진다. */
+    onLoadBlocked: suspend () -> List<String>,
     /** 목록을 처음부터 다시 불러온다 (차단 결과를 반영) */
     onRefresh: () -> Unit,
     onPlayRequested: () -> Unit,
@@ -112,6 +121,9 @@ fun AppNavigation(
                             onOpen = ::openContent,
                             onRetry = onRetry,
                             onLoadMore = onLoadMore,
+                            onOpenBlocked = {
+                                if (backStack.lastOrNull() == HomeRoute) backStack.add(BlockedRoute)
+                            },
                             modifier = Modifier.weight(1f),
                         )
                         val currentId = playback.mediaId
@@ -132,6 +144,44 @@ fun AppNavigation(
                             )
                         }
                     }
+                }
+
+                is BlockedRoute -> NavEntry(key) {
+                    val context = LocalContext.current
+                    var creators by remember { mutableStateOf<List<String>?>(null) }
+                    var error by remember { mutableStateOf<String?>(null) }
+                    var reload by remember { mutableIntStateOf(0) }
+
+                    LaunchedEffect(reload) {
+                        error = null
+                        try {
+                            creators = onLoadBlocked()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            error = userMessage(e)
+                        }
+                    }
+
+                    BlockedScreen(
+                        creators = creators,
+                        error = error,
+                        onRetry = { reload++ },
+                        onUnblock = { id ->
+                            scope.launch {
+                                try {
+                                    onUnblock(id)
+                                    creators = creators?.filter { it != id }
+                                    onRefresh() // 풀린 크리에이터의 곡이 목록에 다시 나타나게 한다
+                                    Toast.makeText(context, "차단을 해제했습니다.", Toast.LENGTH_SHORT).show()
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    Toast.makeText(context, userMessage(e), Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                    )
                 }
 
                 is PlayerRoute -> NavEntry(key) {

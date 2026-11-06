@@ -13,7 +13,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 
 use crate::api::{
     ApiError, ContentDetail, ContentPage, MAX_BODY_BYTES, block_path, content_detail_path, is_valid_id_token,
-    list_contents_path, parse_content_detail, parse_content_page, parse_session,
+    list_contents_path, parse_blocked_list, parse_content_detail, parse_content_page, parse_session,
 };
 use crate::moderation::{ReportReason, create_report, report_to_json, validate_block_target};
 
@@ -279,6 +279,12 @@ impl ApiClient {
         Ok(())
     }
 
+    /// 내가 차단한 크리에이터 id 목록. (로그인 필요)
+    pub async fn list_blocked_creators(&self) -> Result<Vec<String>, NetError> {
+        let body = self.request(Method::GET, "/v1/blocks", None, Auth::Required).await?;
+        Ok(parse_blocked_list(body)?)
+    }
+
     /// 차단을 푼다. (로그인 필요)
     pub async fn unblock_creator(&self, creator_id: String) -> Result<(), NetError> {
         validate_block_target(&creator_id).map_err(|_| NetError::InvalidRequest)?;
@@ -468,6 +474,9 @@ mod tests {
             client.sign_in_with_google("dev-id-token".into()).await.unwrap();
             assert_eq!(client.has_session(), Ok(true));
 
+            // 목업 서버는 차단 상태를 기억한다(앱에서 차단해 둔 상태일 수 있음). 항상 깨끗한 상태에서 시작한다.
+            client.unblock_creator("creator_02".into()).await.unwrap();
+
             client
                 .report_content("sample-3".into(), ReportReason::MissingAiLabel, Some("테스트".into()))
                 .await
@@ -477,6 +486,7 @@ mod tests {
             let before = ids(client.list_contents(20, None).await.unwrap());
             assert!(before.contains(&"sample-3".to_string()));
             client.block_creator("creator_02".into()).await.unwrap();
+            assert_eq!(client.list_blocked_creators().await, Ok(vec!["creator_02".to_string()]));
             let after = ids(client.list_contents(20, None).await.unwrap());
             assert!(!after.contains(&"sample-3".to_string()), "차단한 크리에이터의 곡이 목록에 남아 있음");
             client.unblock_creator("creator_02".into()).await.unwrap();
@@ -497,6 +507,7 @@ mod tests {
         runtime.block_on(async {
             assert_eq!(client.block_creator("creator_02".into()).await, Err(NetError::Unauthorized));
             assert_eq!(client.unblock_creator("creator_02".into()).await, Err(NetError::Unauthorized));
+            assert_eq!(client.list_blocked_creators().await, Err(NetError::Unauthorized));
             assert_eq!(
                 client.report_content("c_1".into(), ReportReason::Spam, None).await,
                 Err(NetError::Unauthorized)
