@@ -10,6 +10,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -114,30 +115,36 @@ fun AppNavigation(
             when (key) {
                 is HomeRoute -> NavEntry(key) {
                     val home by homeState.collectAsState()
+                    var tab by rememberSaveable { mutableStateOf(MainTab.Home) }
                     Column {
-                        HomeScreen(
-                            items = home.items,
-                            loading = home.loading,
-                            error = home.error,
-                            hasMore = home.nextCursor != null,
-                            notice = notice,
-                            onOpen = ::openContent,
-                            onRetry = onRetry,
-                            onLoadMore = onLoadMore,
-                            onOpenBlocked = {
-                                if (backStack.lastOrNull() == HomeRoute) backStack.add(BlockedRoute)
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
+                        // 탭 내용 (YouTube처럼 아래쪽에 미니 플레이어와 탭 막대가 붙는다)
+                        when (tab) {
+                            MainTab.Home -> HomeScreen(
+                                items = home.items,
+                                loading = home.loading,
+                                error = home.error,
+                                hasMore = home.nextCursor != null,
+                                notice = notice,
+                                onOpen = ::openContent,
+                                onRetry = onRetry,
+                                onLoadMore = onLoadMore,
+                                modifier = Modifier.weight(1f),
+                            )
+
+                            MainTab.Me -> MeScreen(
+                                onOpenBlocked = {
+                                    if (backStack.lastOrNull() == HomeRoute) backStack.add(BlockedRoute)
+                                },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
                         val currentId = playback.mediaId
                         if (currentId != null) {
                             MiniPlayer(
+                                artSeed = currentId,
+                                isVideo = playback.isVideo,
                                 title = playback.title,
-                                subtitle = listOfNotNull(
-                                    playback.creatorId,
-                                    if (playback.isVideo) "영상" else null,
-                                    if (playback.aiGenerated) "AI 생성" else null,
-                                ).joinToString(" · "),
+                                subtitle = metaLine(playback.creatorId, playback.isVideo, playback.aiGenerated),
                                 isPlaying = playback.isPlaying,
                                 onTogglePlay = { if (playback.isPlaying) player.pause() else player.play() },
                                 onOpen = {
@@ -156,6 +163,7 @@ fun AppNavigation(
                                 },
                             )
                         }
+                        BottomNav(selected = tab, onSelect = { tab = it })
                     }
                 }
 
@@ -206,6 +214,7 @@ fun AppNavigation(
 
                     PlayerScreen(
                         player = player,
+                        artSeed = key.trackId,
                         title = key.title,
                         creator = key.creator,
                         aiGenerated = key.aiGenerated,
