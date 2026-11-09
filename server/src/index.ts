@@ -7,6 +7,7 @@ import type { AppEnv, UserRow } from './types';
 import {
   DETAIL_MAX,
   cleanMultiline,
+  isContentKind,
   isReportReason,
   isSafeHttpsUrl,
   isValidCursor,
@@ -16,6 +17,7 @@ import {
 
 const MAX_BODY_BYTES = 64 * 1024;
 const MAX_BLOCKS_PER_USER = 1000;
+const MAX_SUBSCRIPTIONS_PER_USER = 500;
 
 const BASE_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' };
 
@@ -119,9 +121,25 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
     after = { t: Number(m[1]), id: m[2] };
   }
 
+  // 종류(오디오/숏폼 영상) 필터와 구독 필터. 구독 필터는 로그인이 필요하다.
+  const kind = params.get('kind');
+  if (kind !== null && !isContentKind(kind)) throw new HttpError(400, 'invalid_request');
+  const subscribedRaw = params.get('subscribed');
+  if (subscribedRaw !== null && subscribedRaw !== '1') throw new HttpError(400, 'invalid_request');
+  const subscribedOnly = subscribedRaw === '1';
+  if (subscribedOnly && !user) throw new HttpError(401, 'unauthorized');
+
   // 공개(approved)된 것만. 로그인한 사용자가 차단한 크리에이터의 콘텐츠는 뺀다.
   const where = ["c.status = 'approved'"];
   const binds: (string | number)[] = [];
+  if (kind !== null) {
+    where.push('c.kind = ?');
+    binds.push(kind);
+  }
+  if (subscribedOnly && user) {
+    where.push('EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = ? AND s.creator_id = c.creator_id)');
+    binds.push(user.id);
+  }
   if (user) {
     where.push('NOT EXISTS (SELECT 1 FROM blocks b WHERE b.user_id = ? AND b.creator_id = c.creator_id)');
     binds.push(user.id);
@@ -162,6 +180,36 @@ async function contentDetail(id: string, request: Request, env: AppEnv): Promise
   const url = streamUrl(env, row);
   if (!url) throw new HttpError(404, 'not_found'); // 재생 주소가 없거나 안전하지 않으면 내보내지 않는다
   return json(200, { ...toSummary(row), stream_url: url });
+}
+
+// ───────────────────────── 구독 ─────────────────────────
+
+async function subscribe(creatorId: string, request: Request, env: AppEnv): Promise<Response> {
+  const user = await requireUser(request, env);
+  if (!isValidId(creatorId) || user.creator_id === creatorId) throw new HttpError(400, 'invalid_request'); // 자기 채널은 구독 불가
+
+  const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM subscriptions WHERE user_id = ?1').bind(user.id).first<{ n: number }>();
+  if ((count?.n ?? 0) >= MAX_SUBSCRIPTIONS_PER_USER) throw new HttpError(400, 'limit_reached');
+
+  await env.DB.prepare('INSERT OR IGNORE INTO subscriptions (user_id, creator_id, created_at) VALUES (?1, ?2, ?3)')
+    .bind(user.id, creatorId, nowSeconds())
+    .run(); // 이미 구독 중이어도 204
+  return noContent();
+}
+
+async function unsubscribe(creatorId: string, request: Request, env: AppEnv): Promise<Response> {
+  const user = await requireUser(request, env);
+  if (!isValidId(creatorId)) throw new HttpError(400, 'invalid_request');
+  await env.DB.prepare('DELETE FROM subscriptions WHERE user_id = ?1 AND creator_id = ?2').bind(user.id, creatorId).run();
+  return noContent();
+}
+
+async function listSubscriptions(request: Request, env: AppEnv): Promise<Response> {
+  const user = await requireUser(request, env);
+  const { results } = await env.DB.prepare('SELECT creator_id FROM subscriptions WHERE user_id = ?1 ORDER BY created_at, creator_id')
+    .bind(user.id)
+    .all<{ creator_id: string }>();
+  return json(200, { creator_ids: results.map((r) => r.creator_id) });
 }
 
 // ───────────────────────── 로그인 ─────────────────────────
@@ -260,9 +308,14 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
   if (pathname === '/v1/auth/google' && method === 'POST') return signInWithGoogle(request, env);
   if (pathname === '/v1/reports' && method === 'POST') return createReport(request, env);
   if (pathname === '/v1/blocks' && method === 'GET') return listBlocks(request, env);
+  if (pathname === '/v1/subscriptions' && method === 'GET') return listSubscriptions(request, env);
 
   let m = /^\/v1\/contents\/([^/]+)$/.exec(pathname);
   if (m && method === 'GET') return contentDetail(m[1], request, env);
+
+  m = /^\/v1\/subscriptions\/([^/]+)$/.exec(pathname);
+  if (m && method === 'PUT') return subscribe(m[1], request, env);
+  if (m && method === 'DELETE') return unsubscribe(m[1], request, env);
 
   m = /^\/v1\/blocks\/([^/]+)$/.exec(pathname);
   if (m && method === 'PUT') return blockCreator(m[1], request, env);

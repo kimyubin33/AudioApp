@@ -43,7 +43,7 @@ check('보안 헤더(nosniff, no-store)', r.headers.get('x-content-type-options'
 r = await call('GET', '/v1/contents');
 check('목록 200', r.status === 200, JSON.stringify(r.data));
 const all = ids(r);
-check('공개(approved) 4곡만, 검수대기·반려는 없음', all.length === 4 && !all.includes('sample-pending') && !all.includes('sample-rejected'), all.join(','));
+check('공개(approved) 7곡만, 검수대기·반려는 없음', all.length === 7 && !all.includes('sample-pending') && !all.includes('sample-rejected'), all.join(','));
 const first = r.data.items[0];
 check('항목 모양(필드, ai_generated는 true/false, 재생 주소 없음)',
   typeof first.id === 'string' && typeof first.title === 'string' && typeof first.creator_id === 'string' &&
@@ -52,12 +52,24 @@ check('항목 모양(필드, ai_generated는 true/false, 재생 주소 없음)',
 check('마지막 페이지의 next_cursor는 null', r.data.next_cursor === null);
 
 // ── 페이지 넘기기 ───────────────────────────────────
-r = await call('GET', '/v1/contents?limit=3');
+r = await call('GET', '/v1/contents?limit=5');
 const page1 = ids(r);
-check('limit=3 이면 3개 + next_cursor', page1.length === 3 && typeof r.data.next_cursor === 'string', JSON.stringify(r.data));
-r = await call('GET', `/v1/contents?limit=3&cursor=${encodeURIComponent(r.data.next_cursor)}`);
+check('limit=5 이면 5개 + next_cursor', page1.length === 5 && typeof r.data.next_cursor === 'string', JSON.stringify(r.data));
+r = await call('GET', `/v1/contents?limit=5&cursor=${encodeURIComponent(r.data.next_cursor)}`);
 const page2 = ids(r);
-check('다음 페이지는 겹치지 않고 합치면 4곡', page2.length === 1 && new Set([...page1, ...page2]).size === 4 && r.data.next_cursor === null, `${page1} | ${page2}`);
+check('다음 페이지는 겹치지 않고 합치면 7곡', page2.length === 2 && new Set([...page1, ...page2]).size === 7 && r.data.next_cursor === null, `${page1} | ${page2}`);
+
+// ── 종류 필터 (오디오 탭 / 숏츠 탭) ─────────────────
+r = await call('GET', '/v1/contents?kind=audio');
+check('kind=audio → 오디오 4곡만', r.status === 200 && r.data.items.length === 4 && r.data.items.every((i) => i.kind === 'audio'), JSON.stringify(r.data));
+r = await call('GET', '/v1/contents?kind=short_video&limit=2');
+check('kind=short_video + limit → 영상만, 페이지 넘김도 필터를 지킨다', r.status === 200 && r.data.items.length === 2 && r.data.items.every((i) => i.kind === 'short_video') && typeof r.data.next_cursor === 'string');
+r = await call('GET', `/v1/contents?kind=short_video&limit=2&cursor=${encodeURIComponent(r.data.next_cursor)}`);
+check('영상 다음 페이지 1곡, 끝', r.data.items.length === 1 && r.data.items[0].kind === 'short_video' && r.data.next_cursor === null);
+check('kind=podcast → 400', (await call('GET', '/v1/contents?kind=podcast')).status === 400);
+check('kind=audio%27%20OR%201=1 → 400', (await call('GET', "/v1/contents?kind=audio'%20OR%201=1")).status === 400);
+check('subscribed=1 은 로그인 없으면 401', (await call('GET', '/v1/contents?subscribed=1')).status === 401);
+check('subscribed=2 → 400', (await call('GET', '/v1/contents?subscribed=2')).status === 400);
 
 check('limit=0 → 400', (await call('GET', '/v1/contents?limit=0')).status === 400);
 check('limit=51 → 400', (await call('GET', '/v1/contents?limit=51')).status === 400);
@@ -116,6 +128,31 @@ check('로그인하지 않은 사람의 목록에는 그대로 있다', ids(awai
 check('차단 해제 204', (await call('DELETE', '/v1/blocks/creator_02', { token })).status === 204);
 check('해제하면 곡이 목록에 돌아온다', ids(await call('GET', '/v1/contents', { token })).includes('sample-3'));
 check('이미 해제한 것을 또 해제해도 204', (await call('DELETE', '/v1/blocks/creator_02', { token })).status === 204);
+
+// ── 구독 ────────────────────────────────────────────
+check('구독: 토큰 없음 → 401', (await call('PUT', '/v1/subscriptions/creator_01')).status === 401);
+check('구독 목록: 토큰 없음 → 401', (await call('GET', '/v1/subscriptions')).status === 401);
+await call('DELETE', '/v1/subscriptions/creator_01', { token }); // 깨끗한 상태에서 시작
+await call('DELETE', '/v1/subscriptions/creator_03', { token });
+r = await call('GET', '/v1/contents?subscribed=1', { token });
+check('구독한 곳이 없으면 구독 목록은 비어 있다', r.status === 200 && r.data.items.length === 0, JSON.stringify(r.data));
+check('구독 204', (await call('PUT', '/v1/subscriptions/creator_01', { token })).status === 204);
+check('이미 구독 중이어도 204', (await call('PUT', '/v1/subscriptions/creator_01', { token })).status === 204);
+check('구독: 이상한 id → 400', (await call('PUT', '/v1/subscriptions/..%2Fx', { token })).status === 400);
+r = await call('GET', '/v1/subscriptions', { token });
+check('구독 목록에 creator_01', r.status === 200 && r.data.creator_ids.length === 1 && r.data.creator_ids[0] === 'creator_01', JSON.stringify(r.data));
+r = await call('GET', '/v1/contents?subscribed=1', { token });
+check('구독 탭: 구독한 채널의 콘텐츠만 (오디오+영상)', r.data.items.length === 3 && r.data.items.every((i) => i.creator_id === 'creator_01'), JSON.stringify(ids(r)));
+r = await call('GET', '/v1/contents?subscribed=1&kind=short_video', { token });
+check('구독 + 영상 필터', r.data.items.length === 1 && r.data.items[0].id === 'sample-4', JSON.stringify(ids(r)));
+// 차단이 구독보다 우선: 구독 중인 채널을 차단하면 구독 목록에서도 빠진다
+await call('PUT', '/v1/blocks/creator_01', { token });
+r = await call('GET', '/v1/contents?subscribed=1', { token });
+check('구독 중인 채널을 차단하면 구독 목록에서도 빠진다', r.data.items.length === 0, JSON.stringify(ids(r)));
+await call('DELETE', '/v1/blocks/creator_01', { token });
+check('구독 해제 204', (await call('DELETE', '/v1/subscriptions/creator_01', { token })).status === 204);
+r = await call('GET', '/v1/contents?subscribed=1', { token });
+check('구독을 해제하면 구독 목록이 다시 빈다', r.data.items.length === 0);
 
 // ── 그 밖 ───────────────────────────────────────────
 check('없는 경로 → 404', (await call('GET', '/v1/nothing')).status === 404);
