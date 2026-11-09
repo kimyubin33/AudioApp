@@ -8,6 +8,9 @@ plugins {
 // googleWebClientId=... 로 둔다. 없으면 빈 값이고, 앱은 "로그인 설정이 안 됨"으로 안내한다.
 val googleWebClientId = providers.gradleProperty("googleWebClientId").orElse("").get()
 
+// debug에서 개발용 로그인 대신 실제 Google 로그인을 시험하려면 gradle.properties에 realLogin=true
+val realLogin = providers.gradleProperty("realLogin").orElse("false").get()
+
 android {
     namespace = "com.kimyubin33.audioapp"
     compileSdk {
@@ -29,10 +32,12 @@ android {
         debug {
             // 개발용 목업 서버 (dev-server/mock_server.py). 에뮬레이터에서 PC는 10.0.2.2 로 보인다.
             buildConfigField("String", "API_BASE_URL", "\"https://10.0.2.2:8443\"")
+            buildConfigField("boolean", "DEV_LOGIN", (realLogin != "true").toString())
         }
         release {
             // 실제 서버가 생기기 전까지는 연결될 수 없는 예약 주소(.invalid)를 둔다.
             buildConfigField("String", "API_BASE_URL", "\"https://api.example.invalid\"")
+            buildConfigField("boolean", "DEV_LOGIN", "false")
             // R8 축소·최적화. 템플릿의 packageScope(라이브러리 패키지만 처리)는 실행 시작 중
             // IllegalAccessError(kotlin.collections.* 접근 불가)를 일으켜 빼고, 앱 전체를 일관되게 처리한다.
             // UniFFI·JNA처럼 이름으로 접근하는 코드는 src/main/keepRules/rules.keep 에서 지키는 규칙을 둔다.

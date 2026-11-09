@@ -113,18 +113,23 @@ export async function verifyGoogleIdToken(env: AppEnv, idToken: string, nowSecon
   if (typeof env.GOOGLE_CLIENT_ID !== 'string' || env.GOOGLE_CLIENT_ID.length === 0) {
     throw new Error('GOOGLE_CLIENT_ID is not configured');
   }
-  if (idToken.length > 4096) return null;
+  // 거절 사유 코드만 기록한다 (토큰·계정 정보는 남기지 않는다)
+  const reject = (reason: string): null => {
+    console.warn(`google id token rejected: ${reason}`);
+    return null;
+  };
+  if (idToken.length > 4096) return reject('too-long');
   const parts = idToken.split('.');
-  if (parts.length !== 3) return null;
+  if (parts.length !== 3) return reject('not-3-parts');
   const [h, p, s] = parts;
   const header = parseJsonPart(h);
-  if (!header || header.alg !== 'RS256' || typeof header.kid !== 'string') return null;
+  if (!header || header.alg !== 'RS256' || typeof header.kid !== 'string') return reject('bad-header');
   const sig = b64urlDecode(s);
-  if (!sig) return null;
+  if (!sig) return reject('bad-signature-encoding');
 
   let key = (await googleKeys(false)).find((k) => k.kid === header.kid);
   if (!key) key = (await googleKeys(true)).find((k) => k.kid === header.kid); // 키가 새로 돌려졌을 수 있다
-  if (!key || key.kty !== 'RSA') return null;
+  if (!key || key.kty !== 'RSA') return reject('unknown-key');
 
   const cryptoKey = await crypto.subtle.importKey(
     'jwk',
@@ -133,15 +138,15 @@ export async function verifyGoogleIdToken(env: AppEnv, idToken: string, nowSecon
     false,
     ['verify'],
   );
-  if (!(await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, sig, encoder.encode(`${h}.${p}`)))) return null;
+  if (!(await crypto.subtle.verify('RSASSA-PKCS1-v1_5', cryptoKey, sig, encoder.encode(`${h}.${p}`)))) return reject('signature-mismatch');
 
   const claims = parseJsonPart(p);
-  if (!claims) return null;
-  if (typeof claims.iss !== 'string' || !GOOGLE_ISSUERS.includes(claims.iss)) return null;
+  if (!claims) return reject('bad-claims');
+  if (typeof claims.iss !== 'string' || !GOOGLE_ISSUERS.includes(claims.iss)) return reject('bad-issuer');
   const aud = claims.aud;
-  if (aud !== env.GOOGLE_CLIENT_ID && !(Array.isArray(aud) && aud.includes(env.GOOGLE_CLIENT_ID))) return null;
-  if (typeof claims.exp !== 'number' || claims.exp + CLOCK_SKEW_SECONDS <= nowSeconds) return null;
-  if (typeof claims.iat === 'number' && claims.iat - CLOCK_SKEW_SECONDS > nowSeconds) return null;
+  if (aud !== env.GOOGLE_CLIENT_ID && !(Array.isArray(aud) && aud.includes(env.GOOGLE_CLIENT_ID))) return reject('audience-mismatch');
+  if (typeof claims.exp !== 'number' || claims.exp + CLOCK_SKEW_SECONDS <= nowSeconds) return reject('expired');
+  if (typeof claims.iat === 'number' && claims.iat - CLOCK_SKEW_SECONDS > nowSeconds) return reject('issued-in-future');
   const sub = claims.sub;
-  return typeof sub === 'string' && sub.length > 0 && sub.length <= 255 ? sub : null;
+  return typeof sub === 'string' && sub.length > 0 && sub.length <= 255 ? sub : reject('bad-sub');
 }

@@ -53,7 +53,7 @@ object AccountActions {
         return try {
             action(api)
         } catch (e: NetException.Unauthorized) {
-            if (!BuildConfig.DEBUG) throw e
+            if (!BuildConfig.DEV_LOGIN) throw e
             api.signInWithGoogle(DEV_ID_TOKEN)
             action(api)
         }
