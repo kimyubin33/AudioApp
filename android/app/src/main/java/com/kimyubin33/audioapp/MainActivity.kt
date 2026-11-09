@@ -22,6 +22,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.kimyubin33.audioapp.ui.AppNavigation
+import com.kimyubin33.audioapp.ui.FeedKind
 import com.kimyubin33.audioapp.ui.HomeViewModel
 import com.kimyubin33.audioapp.ui.theme.AudioAppTheme
 
@@ -40,7 +41,7 @@ class MainActivity : ComponentActivity() {
     // debug 전용: 에뮬레이터에서 PC의 목업 서버(사설망 주소)에 접속하려면 필요하다 (Android 17+).
     // 허용하든 거부하든 목록 불러오기를 시작한다 (거부하면 화면에 오류와 "다시 시도"가 보인다).
     private val localNetworkPermission =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { homeViewModel.loadIfNeeded() }
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { homeViewModel.loadIfNeeded(FeedKind.Audio) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,15 +55,7 @@ class MainActivity : ComponentActivity() {
                     controller?.let { player ->
                         AppNavigation(
                             player = player,
-                            homeState = homeViewModel.state,
-                            onRetry = homeViewModel::retry,
-                            onLoadMore = homeViewModel::loadMore,
-                            loadDetail = homeViewModel::loadDetail,
-                            onReport = homeViewModel::report,
-                            onBlock = homeViewModel::block,
-                            onUnblock = homeViewModel::unblock,
-                            onLoadBlocked = homeViewModel::blockedCreators,
-                            onRefresh = homeViewModel::refresh,
+                            viewModel = homeViewModel,
                             onPlayRequested = ::requestNotificationPermissionIfNeeded,
                             modifier = Modifier
                                 .fillMaxSize()
@@ -91,7 +84,7 @@ class MainActivity : ComponentActivity() {
         if (needsLocalNetworkPermission) {
             localNetworkPermission.launch(LOCAL_NETWORK_PERMISSION)
         } else {
-            homeViewModel.loadIfNeeded()
+            homeViewModel.loadIfNeeded(FeedKind.Audio)
         }
     }
 

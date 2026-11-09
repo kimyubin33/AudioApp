@@ -76,6 +76,10 @@ fun PlayerScreen(
     creator: String,
     aiGenerated: Boolean,
     isVideo: Boolean,
+    subscribed: Boolean,
+    saved: Boolean,
+    onToggleSubscribe: () -> Unit,
+    onToggleSave: () -> Unit,
     onReport: () -> Unit,
     onBlock: () -> Unit,
     modifier: Modifier = Modifier,
@@ -134,6 +138,10 @@ fun PlayerScreen(
         },
         onReport = onReport,
         onBlock = onBlock,
+        subscribed = subscribed,
+        saved = saved,
+        onToggleSubscribe = onToggleSubscribe,
+        onToggleSave = onToggleSave,
         hasError = hasError,
         onRetry = {
             player.prepare() // 오류 상태를 풀고 처음부터 다시 불러온다
@@ -186,6 +194,10 @@ fun PlayerContent(
     onReport: () -> Unit,
     onBlock: () -> Unit,
     modifier: Modifier = Modifier,
+    subscribed: Boolean = false,
+    saved: Boolean = false,
+    onToggleSubscribe: () -> Unit = {},
+    onToggleSave: () -> Unit = {},
     /** 재생에 실패한 상태인가 */
     hasError: Boolean = false,
     onRetry: () -> Unit = {},
@@ -211,6 +223,8 @@ fun PlayerContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
+                SubscribeButton(subscribed = subscribed, onClick = onToggleSubscribe)
+                Spacer(Modifier.width(10.dp))
                 // 모든 콘텐츠에 AI 생성 여부를 표시한다. 낙관(도장)처럼 얇은 먹 테두리로.
                 if (aiGenerated) {
                     Text(
@@ -268,6 +282,7 @@ fun PlayerContent(
 
             // 신고·차단은 눈에 띄지 않게, 하지만 언제든 찾을 수 있게 아래쪽에 둔다
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onToggleSave) { Text(if (saved) "저장됨" else "저장", color = MaterialTheme.colorScheme.onSurface) }
                 TextButton(onClick = onReport) { Text("신고", color = Ash) }
                 TextButton(onClick = onBlock) { Text("크리에이터 차단", color = Ash) }
             }

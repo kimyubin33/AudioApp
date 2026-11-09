@@ -28,10 +28,12 @@
 
 ## 엔드포인트
 
-### `GET /v1/contents?limit=20&cursor=...` — 목록 (로그인 불필요)
+### `GET /v1/contents?limit=20&cursor=...&kind=audio&subscribed=1` — 목록 (로그인 불필요, `subscribed`만 필요)
 
 - `limit`: 1~50 (생략 시 서버 기본값)
 - `cursor`: 이전 응답의 `next_cursor`
+- `kind`: 선택. `audio` 또는 `short_video`만 (오디오 탭 / 숏츠 탭)
+- `subscribed=1`: 선택. **내가 구독한 크리에이터의 콘텐츠만** (구독 탭). 로그인이 필요하며 없으면 `401`.
 - 로그인한 사용자가 요청하면 **서버가 차단한 크리에이터의 콘텐츠를 목록에서 뺍니다.**
 
 ```json
@@ -96,6 +98,13 @@
 - `DELETE /v1/blocks/{creator_id}` → `204`
 - `GET /v1/blocks` → `{ "creator_ids": ["creator_02"] }`
 - 자기 자신은 차단할 수 없습니다 (`400`).
+
+### 구독 (로그인 필요)
+
+- `PUT /v1/subscriptions/{creator_id}` → `204` (이미 구독 중이어도 `204`)
+- `DELETE /v1/subscriptions/{creator_id}` → `204`
+- `GET /v1/subscriptions` → `{ "creator_ids": ["creator_01"] }`
+- 기록·저장 목록은 서버에 두지 않고 **기기 안에만** 저장합니다 (백업·기기 이전에서도 제외).
 
 ### 업로드 (승인된 크리에이터만, 앱·웹 공통)
 

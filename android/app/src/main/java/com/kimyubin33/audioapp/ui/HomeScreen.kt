@@ -26,13 +26,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.kimyubin33.audioapp.R
 import com.kimyubin33.audioapp.ui.theme.AudioAppTheme
 import com.kimyubin33.audioapp.ui.theme.BrushFont
 import com.kimyubin33.audioapp.ui.theme.Ink
@@ -51,9 +49,13 @@ data class HomeItem(
 internal fun metaLine(creator: String, isVideo: Boolean, aiGenerated: Boolean): String =
     listOfNotNull(creator, if (isVideo) "영상" else null, if (aiGenerated) "AI 생성" else null).joinToString(" · ")
 
-/** 홈 피드. YouTube 모바일처럼 큰 썸네일 카드를 위에서 아래로 쌓는다. */
+/** 피드. YouTube 모바일처럼 큰 썸네일 카드를 위에서 아래로 쌓는다. 오디오 탭과 구독 탭이 함께 쓴다. */
 @Composable
-fun HomeScreen(
+fun FeedScreen(
+    /** 맨 위에 붓글씨로 쓰는 제목 */
+    title: String,
+    /** 목록이 비었을 때 보여 줄 안내 */
+    emptyMessage: String,
     items: List<HomeItem>,
     loading: Boolean,
     error: String?,
@@ -68,7 +70,7 @@ fun HomeScreen(
     LazyColumn(modifier = modifier.fillMaxSize()) {
         item {
             Text(
-                text = stringResource(R.string.app_name),
+                text = title,
                 style = MaterialTheme.typography.displaySmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 4.dp),
@@ -92,7 +94,7 @@ fun HomeScreen(
                 when {
                     error != null -> StatusMessage(message = error, actionLabel = "다시 시도", onAction = onRetry)
                     loading -> StatusMessage(message = "불러오는 중...")
-                    else -> StatusMessage(message = "아직 올라온 곡이 없습니다.")
+                    else -> StatusMessage(message = emptyMessage)
                 }
             }
         } else {
@@ -209,9 +211,10 @@ private val previewItems = listOf(
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 760)
 @Composable
-private fun HomeScreenPreview() {
+private fun FeedScreenPreview() {
     AudioAppTheme {
-        HomeScreen(
+        FeedScreen(
+            title = "AudioApp", emptyMessage = "",
             items = previewItems, loading = false, error = null, hasMore = true, notice = null,
             onOpen = {}, onRetry = {}, onLoadMore = {},
         )
@@ -220,9 +223,10 @@ private fun HomeScreenPreview() {
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 400)
 @Composable
-private fun HomeScreenErrorPreview() {
+private fun FeedScreenErrorPreview() {
     AudioAppTheme {
-        HomeScreen(
+        FeedScreen(
+            title = "구독", emptyMessage = "",
             items = emptyList(), loading = false, error = "서버에 연결할 수 없습니다. 연결을 확인해 주세요.",
             hasMore = false, notice = null, onOpen = {}, onRetry = {}, onLoadMore = {},
         )

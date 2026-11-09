@@ -9,7 +9,7 @@ import uniffi.audio_core.NetException
 import uniffi.audio_core.ReportReason
 
 /**
- * 로그인이 필요한 동작(신고·차단). 토큰이 없거나 만료돼 `Unauthorized`가 나오면:
+ * 로그인이 필요한 동작(신고·차단·구독). 토큰이 없거나 만료돼 `Unauthorized`가 나오면:
  * - debug 빌드: 목업 서버용 개발 로그인을 한 번 하고 다시 시도한다.
  * - release 빌드: 아직 실제(Google) 로그인 화면이 없으므로 그대로 오류를 알린다.
  */
@@ -31,7 +31,24 @@ object AccountActions {
     suspend fun blockedCreators(context: Context): List<String> =
         withLogin(context) { it.listBlockedCreators() }
 
-    private suspend fun <T> withLogin(context: Context, action: suspend (ApiClient) -> T): T {
+    suspend fun subscribe(context: Context, creatorId: String) =
+        withLogin(context) { it.subscribeCreator(creatorId) }
+
+    suspend fun unsubscribe(context: Context, creatorId: String) =
+        withLogin(context) { it.unsubscribeCreator(creatorId) }
+
+    /** 내가 구독한 크리에이터 id 목록. 로그인돼 있지 않으면 (로그인을 시도하지 않고) 빈 목록. */
+    suspend fun subscribedCreatorsIfLoggedIn(context: Context): List<String> {
+        val api = withContext(Dispatchers.IO) { AudioApi.get(context) }
+        return try {
+            api.listSubscribedCreators()
+        } catch (e: NetException.Unauthorized) {
+            emptyList()
+        }
+    }
+
+    /** 로그인이 필요한 요청을 실행한다. 로그인이 안 돼 있으면 debug에서만 개발 로그인을 하고 다시 시도한다. */
+    suspend fun <T> withLogin(context: Context, action: suspend (ApiClient) -> T): T {
         val api = withContext(Dispatchers.IO) { AudioApi.get(context) }
         return try {
             action(api)

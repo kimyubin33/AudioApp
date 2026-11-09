@@ -16,6 +16,8 @@ data class PlaybackSnapshot(
     val aiGenerated: Boolean,
     val isVideo: Boolean,
     val isPlaying: Boolean,
+    /** 재생에 실패한 상태인가 */
+    val hasError: Boolean,
 )
 
 @Composable
@@ -47,5 +49,6 @@ private fun Player.snapshot(): PlaybackSnapshot {
         isPlaying = playWhenReady &&
             playbackState != Player.STATE_IDLE &&
             playbackState != Player.STATE_ENDED,
+        hasError = playerError != null,
     )
 }
