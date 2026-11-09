@@ -2,6 +2,7 @@ package com.kimyubin33.audioapp.data
 
 import android.content.Context
 import com.kimyubin33.audioapp.BuildConfig
+import com.kimyubin33.audioapp.KeystoreTokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.audio_core.ApiClient
@@ -53,7 +54,7 @@ object AccountActions {
         return try {
             action(api)
         } catch (e: NetException.Unauthorized) {
-            if (!BuildConfig.DEV_LOGIN) throw e
+            if (!BuildConfig.DEV_LOGIN || !withContext(Dispatchers.IO) { KeystoreTokenStore(context).allowsDevAutoLogin() }) throw e
             api.signInWithGoogle(DEV_ID_TOKEN)
             action(api)
         }

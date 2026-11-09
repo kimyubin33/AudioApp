@@ -31,10 +31,10 @@ private val InkOnPaperColorScheme = lightColorScheme(
 // 먹으로 쓴 듯 둥글지 않고 단정한 모서리
 private val InkShapes = Shapes(
     extraSmall = RoundedCornerShape(2.dp),
-    small = RoundedCornerShape(3.dp),
-    medium = RoundedCornerShape(4.dp),
-    large = RoundedCornerShape(6.dp),
-    extraLarge = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(8.dp),
+    medium = RoundedCornerShape(12.dp),
+    large = RoundedCornerShape(16.dp),
+    extraLarge = RoundedCornerShape(24.dp),
 )
 
 @Composable

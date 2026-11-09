@@ -1,6 +1,19 @@
 package com.kimyubin33.audioapp.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -18,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -47,102 +61,94 @@ data class HomeItem(
 
 /** "creator · 영상 · AI 생성" 처럼 보조 정보를 한 줄로. */
 internal fun metaLine(creator: String, isVideo: Boolean, aiGenerated: Boolean): String =
-    listOfNotNull(creator, if (isVideo) "영상" else null, if (aiGenerated) "AI 생성" else null).joinToString(" · ")
+    listOfNotNull(creator, if (isVideo) "쇼츠" else null, if (aiGenerated) "AI 생성" else null).joinToString(" · ")
 
-/** 피드. YouTube 모바일처럼 큰 썸네일 카드를 위에서 아래로 쌓는다. 오디오 탭과 구독 탭이 함께 쓴다. */
+/** 한 피드에서 오디오와 쇼츠를 발견한다. 검색은 사용자가 열 때만 펼친다. */
 @Composable
 fun FeedScreen(
-    /** 맨 위에 붓글씨로 쓰는 제목 */
     title: String,
-    /** 목록이 비었을 때 보여 줄 안내 */
     emptyMessage: String,
     items: List<HomeItem>,
     loading: Boolean,
     error: String?,
     hasMore: Boolean,
-    /** 곡을 열다 실패했을 때 등, 잠깐 알려줄 문구 */
     notice: String?,
     onOpen: (String) -> Unit,
     onRetry: () -> Unit,
     onLoadMore: () -> Unit,
     modifier: Modifier = Modifier,
+    searchQuery: String? = null,
+    onSearch: (String) -> Unit = {},
+    onCreateMemory: (() -> Unit)? = null,
+    format: FeedFormat = FeedFormat.All,
+    onFormat: (FeedFormat) -> Unit = {},
+    onOpenShorts: (() -> Unit)? = null,
 ) {
-    LazyColumn(modifier = modifier.fillMaxSize()) {
-        item {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.displaySmall,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 4.dp),
-            )
-            InkDivider(Modifier.padding(bottom = 16.dp))
-        }
-        if (notice != null) {
-            item {
-                Text(
-                    text = notice,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                )
-            }
-        }
-
-        if (items.isEmpty()) {
-            // 목록이 비어 있을 때: 불러오는 중이거나, 실패했거나
-            item {
-                when {
-                    error != null -> StatusMessage(message = error, actionLabel = "다시 시도", onAction = onRetry)
-                    loading -> StatusMessage(message = "불러오는 중...")
-                    else -> StatusMessage(message = emptyMessage)
+    var searchOpen by rememberSaveable { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(searchQuery) { if (!searchQuery.isNullOrEmpty()) searchOpen = true }
+    LaunchedEffect(format) { listState.scrollToItem(0) }
+    Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        LazyColumn(Modifier.widthIn(max=760.dp).fillMaxSize(), state=listState, contentPadding=PaddingValues(bottom=24.dp)) {
+            item(key="header") {
+                AlbumHeader(onSearch=if(searchQuery!=null) ({ searchOpen=!searchOpen }) else null, onCreate=onCreateMemory)
+                if (title != "피드") {
+                    Text(title,style=MaterialTheme.typography.titleLarge,modifier=Modifier.padding(horizontal=24.dp,vertical=12.dp))
                 }
+                if (searchOpen && searchQuery!=null) OutlinedTextField(
+                    value=searchQuery,onValueChange=onSearch,singleLine=true,label={Text("검색")},
+                    trailingIcon={if(searchQuery.isNotEmpty()) TextButton(onClick={onSearch("")}){Text("지우기")}},
+                    modifier=Modifier.fillMaxWidth().padding(horizontal=24.dp,vertical=12.dp),
+                    shape=RoundedCornerShape(14.dp),
+                )
+                if(title=="피드") {
+                    Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal=24.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+                        FeedFormat.entries.forEach { entry ->
+                            FilterChip(selected=format==entry,onClick={onFormat(entry)},label={Text(entry.label)},
+                                colors=FilterChipDefaults.filterChipColors(selectedContainerColor=Ink,selectedLabelColor=Paper))
+                        }
+                    }
+                    if(format==FeedFormat.Shorts && onOpenShorts!=null) TextButton(onClick=onOpenShorts,modifier=Modifier.padding(horizontal=16.dp)){Text("연속 재생")}
+                    Spacer(Modifier.height(12.dp))
+                } else Spacer(Modifier.height(12.dp))
             }
-        } else {
-            items(items, key = { it.id }) { item -> FeedCard(item = item, onOpen = onOpen) }
-            // 목록 끝: 더 불러오는 중이거나, 실패했거나, 더 있거나
-            item {
+            if(notice!=null) item { StatusMessage(notice) }
+            if(items.isEmpty()) item {
                 when {
-                    loading -> StatusMessage(message = "불러오는 중...")
-                    error != null -> StatusMessage(message = error, actionLabel = "다시 시도", onAction = onRetry)
-                    hasMore -> StatusMessage(message = null, actionLabel = "더 보기", onAction = onLoadMore)
+                    error!=null -> StatusMessage(error,actionLabel="다시 시도",onAction=onRetry)
+                    loading -> StatusMessage("불러오는 중…")
+                    else -> StatusMessage(emptyMessage)
+                }
+            } else {
+                items(items,key={it.id}) { FeedCard(it,onOpen) }
+                item {
+                    when {
+                        loading -> StatusMessage("불러오는 중…")
+                        error!=null -> StatusMessage(error,actionLabel="다시 시도",onAction=onRetry)
+                        hasMore -> StatusMessage(null,actionLabel="더 보기",onAction=onLoadMore)
+                    }
                 }
             }
         }
     }
 }
 
-/** 큰 먹 그림 썸네일 + 크리에이터 표식 + 제목·보조 정보. */
 @Composable
-private fun FeedCard(item: HomeItem, onOpen: (String) -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(role = Role.Button, onClickLabel = "재생") { onOpen(item.id) }
-            .padding(bottom = 22.dp),
-    ) {
-        Box {
-            InkArt(seed = item.id, isVideo = item.isVideo, modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f))
-            if (item.isVideo) PlayBadge(Modifier.align(Alignment.BottomEnd).padding(12.dp))
+internal fun FeedCard(item: HomeItem, onOpen: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(horizontal=24.dp).padding(bottom=28.dp)
+        .clickable(role=Role.Button,onClickLabel="이야기 재생"){onOpen(item.id)}) {
+        Box(Modifier.clip(RoundedCornerShape(14.dp))) {
+            InkArt(seed=item.id,isVideo=item.isVideo,modifier=Modifier.fillMaxWidth().aspectRatio(16f/9f))
+            if(item.isVideo) PlayBadge(Modifier.align(Alignment.BottomEnd).padding(12.dp))
         }
-        Row(modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)) {
-            CreatorMark(item.creator)
-            Spacer(Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = item.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = metaLine(item.creator, item.isVideo, item.aiGenerated),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+        Row(Modifier.padding(start=8.dp,end=8.dp,top=12.dp),verticalAlignment=Alignment.CenterVertically) {
+            CreatorMark(item.creator,size=36.dp)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(item.title,style=MaterialTheme.typography.titleMedium.copy(fontFamily=FontFamily.Default,fontWeight=FontWeight.SemiBold),
+                    maxLines=2,overflow=TextOverflow.Ellipsis)
+                Text(metaLine(item.creator,item.isVideo,item.aiGenerated),style=MaterialTheme.typography.bodySmall,
+                    color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
             }
         }
     }
@@ -214,7 +220,7 @@ private val previewItems = listOf(
 private fun FeedScreenPreview() {
     AudioAppTheme {
         FeedScreen(
-            title = "AudioApp", emptyMessage = "",
+            title = "피드", emptyMessage = "", onCreateMemory = {}, searchQuery = "",
             items = previewItems, loading = false, error = null, hasMore = true, notice = null,
             onOpen = {}, onRetry = {}, onLoadMore = {},
         )

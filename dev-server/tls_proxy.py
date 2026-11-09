@@ -16,7 +16,7 @@ from mock_server import CERTS, ensure_certs, install_dev_ca
 
 LISTEN_HOST, LISTEN_PORT = "127.0.0.1", 8443
 UPSTREAM_HOST, UPSTREAM_PORT = "127.0.0.1", 8787
-MAX_BODY = 1024 * 1024
+MAX_BODY = 90 * 1024 * 1024
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailers",
               "transfer-encoding", "upgrade", "host", "content-length"}
 
@@ -30,15 +30,32 @@ class Proxy(BaseHTTPRequestHandler):
         print(f"{self.command} {urlparse(self.path).path} -> {args[1] if len(args) > 1 else ''}")
 
     def _forward(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > MAX_BODY:
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            self.send_error(400)
+            return
+        if length < 0 or length > MAX_BODY:
             self.send_error(413)
             return
-        body = self.rfile.read(length) if length else None
+        if self.headers.get("Transfer-Encoding"):
+            self.send_error(411)
+            return
         headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP_BY_HOP}
         try:
-            conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=30)
-            conn.request(self.command, self.path, body=body, headers=headers)
+            conn = http.client.HTTPConnection(UPSTREAM_HOST, UPSTREAM_PORT, timeout=900)
+            conn.putrequest(self.command, self.path)
+            for key, value in headers.items():
+                conn.putheader(key, value)
+            conn.putheader("Content-Length", str(length))
+            conn.endheaders()
+            remaining = length
+            while remaining:
+                chunk = self.rfile.read(min(64 * 1024, remaining))
+                if not chunk:
+                    raise OSError("incomplete request")
+                conn.send(chunk)
+                remaining -= len(chunk)
             res = conn.getresponse()
             data = res.read()
         except OSError:
@@ -53,11 +70,11 @@ class Proxy(BaseHTTPRequestHandler):
         for k, v in res.getheaders():
             if k.lower() not in HOP_BY_HOP:
                 self.send_header(k, v)
-        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Content-Length", res.getheader("Content-Length", "0") if self.command == "HEAD" else str(len(data)))
         self.end_headers()
         self.wfile.write(data)
 
-    do_GET = do_POST = do_PUT = do_DELETE = _forward
+    do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = _forward
 
 
 def main():

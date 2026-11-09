@@ -2,7 +2,9 @@ uniffi::setup_scaffolding!();
 
 mod api;
 mod content;
+mod creator;
 mod moderation;
+mod nearby;
 mod net;
 mod tls;
 mod validation;

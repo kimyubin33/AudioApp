@@ -9,6 +9,7 @@ import androidx.credentials.exceptions.GetCredentialException
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.kimyubin33.audioapp.BuildConfig
+import com.kimyubin33.audioapp.KeystoreTokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -40,6 +41,7 @@ object GoogleSignIn {
             }
             val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
             val api = withContext(Dispatchers.IO) { AudioApi.get(activityContext.applicationContext) }
+            withContext(Dispatchers.IO) { KeystoreTokenStore(activityContext).setDevAutoLoginAllowed(false) }
             api.signInWithGoogle(idToken)
             SignInResult.Success
         } catch (e: GetCredentialCancellationException) {

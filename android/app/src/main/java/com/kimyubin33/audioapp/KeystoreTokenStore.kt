@@ -1,6 +1,7 @@
 package com.kimyubin33.audioapp
 
 import android.content.Context
+import com.kimyubin33.audioapp.data.SessionSignals
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -30,6 +31,7 @@ class KeystoreTokenStore(context: Context) : TokenStore {
         } catch (e: Exception) {
             // 키가 사라졌거나(기기 이전·잠금 해제 방식 변경 등) 데이터가 손상됨 → 로그인 안 된 상태로 취급
             prefs.edit().remove(KEY_TOKEN).apply()
+            SessionSignals.changed()
             null
         }
     }
@@ -41,6 +43,7 @@ class KeystoreTokenStore(context: Context) : TokenStore {
             if (!prefs.edit().putString(KEY_TOKEN, encrypted).commit()) {
                 throw TokenStoreException.Unavailable()
             }
+            SessionSignals.changed()
         } catch (e: TokenStoreException) {
             throw e
         } catch (e: Exception) {
@@ -52,6 +55,13 @@ class KeystoreTokenStore(context: Context) : TokenStore {
         if (!prefs.edit().remove(KEY_TOKEN).commit()) {
             throw TokenStoreException.Unavailable()
         }
+        SessionSignals.changed()
+    }
+
+    fun allowsDevAutoLogin(): Boolean = prefs.getBoolean("dev_auto_login", true)
+
+    fun setDevAutoLoginAllowed(allowed: Boolean) {
+        if (!prefs.edit().putBoolean("dev_auto_login", allowed).commit()) throw TokenStoreException.Unavailable()
     }
 
     private fun encrypt(plain: String): ByteArray {

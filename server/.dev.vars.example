@@ -10,5 +10,6 @@ TOKEN_SECRET=local-dev-secret-change-me-local-dev-secret-change-me
 # Google 웹 클라이언트 ID (docs/google-signin-setup.md). ID 토큰의 "받는 사람"이 이 값인지 확인한다.
 GOOGLE_CLIENT_ID=dev-client-id.apps.googleusercontent.com
 
-# 업로드된 파일이 공개되는 주소(R2 공개 도메인). 개발 중에는 비워 둬도 된다.
-MEDIA_BASE_URL=
+# API 공개 HTTPS 원점 (생략하면 요청 원점). R2는 비공개로 유지한다.
+# 앱 TLS 프록시 개발 시 예: API_BASE_URL=https://10.0.2.2:8443
+API_BASE_URL=

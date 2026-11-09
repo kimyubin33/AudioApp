@@ -1,6 +1,14 @@
 package com.kimyubin33.audioapp.ui
 
 import android.widget.Toast
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.kimyubin33.audioapp.BuildConfig
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,6 +57,30 @@ private data object HomeRoute : NavKey
 private data object BlockedRoute : NavKey
 
 @Serializable
+private data object AccountRoute : NavKey
+
+@Serializable
+private data class ProfileRoute(val userId: String) : NavKey
+
+@Serializable
+private data object MomentsRoute : NavKey
+
+@Serializable
+private data object CreatorRoute : NavKey
+
+@Serializable
+private data object NearbyRoute : NavKey
+
+@Serializable
+private data object ShortsRoute : NavKey
+
+@Serializable
+private data object MemoryEditorRoute : NavKey
+
+@Serializable
+private data class MemoryDetailRoute(val id: String) : NavKey
+
+@Serializable
 private data class PlayerRoute(
     val trackId: String,
     val title: String,
@@ -58,16 +90,19 @@ private data class PlayerRoute(
 ) : NavKey
 
 private fun MainTab.feedKind(): FeedKind? = when (this) {
-    MainTab.Audio -> FeedKind.Audio
-    MainTab.Shorts -> FeedKind.Shorts
+    MainTab.Feed -> FeedKind.Audio
     MainTab.Subscriptions -> FeedKind.Subscribed
-    MainTab.Library -> null
+    MainTab.Places, MainTab.Create, MainTab.Library -> null
 }
 
 @Composable
 fun AppNavigation(
     player: Player,
     viewModel: HomeViewModel,
+    creatorViewModel: CreatorViewModel,
+    nearbyViewModel: NearbyViewModel,
+    memoryViewModel: MemoryViewModel,
+    accountViewModel: AccountViewModel,
     onPlayRequested: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -77,6 +112,12 @@ fun AppNavigation(
     val context = LocalContext.current
 
     fun toast(message: String) = Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+    val lifecycle=LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle,accountViewModel) {
+        val observer=LifecycleEventObserver { _,event->if(event==Lifecycle.Event.ON_RESUME) accountViewModel.refresh() }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
 
     // 곡을 여는 중에 또 누르는 것을 막고, 실패하면 홈 위쪽에 짧게 알려준다
     var opening by remember { mutableStateOf(false) }
@@ -88,12 +129,14 @@ fun AppNavigation(
     var submitting by remember { mutableStateOf(false) }
 
     fun openContent(id: String) {
-        if (opening || backStack.lastOrNull() != HomeRoute) return
+        val origin = backStack.lastOrNull()
+        if (opening || (origin != HomeRoute && origin != NearbyRoute)) return
         opening = true
         notice = null
         scope.launch {
             try {
                 val detail = viewModel.loadDetail(id)
+                if (backStack.lastOrNull() != origin) return@launch
                 onPlayRequested()
                 playContent(player, detail)
                 viewModel.recordPlay(detail)
@@ -136,6 +179,7 @@ fun AppNavigation(
                         toast("로그인했습니다.")
                         viewModel.markAllStale()
                         viewModel.refreshSubscriptions()
+                        if (backStack.lastOrNull() == CreatorRoute) creatorViewModel.refresh()
                     }
                     SignInResult.Cancelled -> Unit
                     SignInResult.NotConfigured -> toast("로그인 설정이 아직 되어 있지 않습니다.")
@@ -172,47 +216,123 @@ fun AppNavigation(
             entryProvider = { key ->
                 when (key) {
                     is HomeRoute -> NavEntry(key) {
-                        var tab by rememberSaveable { mutableStateOf(MainTab.Audio) }
-                        val audio by viewModel.feed(FeedKind.Audio).collectAsState()
-                        val shorts by viewModel.feed(FeedKind.Shorts).collectAsState()
+                        var tab by rememberSaveable { mutableStateOf(MainTab.Feed) }
+                        val feed by viewModel.feed(FeedKind.Audio).collectAsState()
+                        val searchQuery by viewModel.query.collectAsState()
+                        val format by viewModel.format.collectAsState()
                         val subs by viewModel.feed(FeedKind.Subscribed).collectAsState()
                         val history by viewModel.history.collectAsState()
                         val saved by viewModel.saved.collectAsState()
-                        val subscribed by viewModel.subscribed.collectAsState()
-                        val savedIds = remember(saved) { saved.map { it.id }.toSet() }
-
-                        // 보이는 탭의 목록이 아직 없거나 다시 불러와야 하면 불러온다
-                        val kind = tab.feedKind()
-                        val stale = when (kind) {
-                            FeedKind.Audio -> audio.stale
-                            FeedKind.Shorts -> shorts.stale
-                            FeedKind.Subscribed -> subs.stale
-                            null -> false
-                        }
-                        LaunchedEffect(tab, stale) { kind?.let(viewModel::loadIfNeeded) }
+                        val account by accountViewModel.state.collectAsState()
+                        val kind=tab.feedKind()
+                        val stale=when(kind) { FeedKind.Audio->feed.stale; FeedKind.Subscribed->subs.stale; else->false }
+                        LaunchedEffect(tab,stale) { kind?.let(viewModel::loadIfNeeded) }
                         LaunchedEffect(tab) {
-                            if (tab == MainTab.Shorts || tab == MainTab.Subscriptions) viewModel.refreshSubscriptions()
-                            // 숏츠는 짧아서 끝나면 처음부터 다시 돈다. 다른 탭에서는 평소대로.
-                            player.repeatMode = if (tab == MainTab.Shorts) Player.REPEAT_MODE_ONE else Player.REPEAT_MODE_OFF
+                            if(tab==MainTab.Subscriptions) viewModel.refreshSubscriptions()
+                            if(tab==MainTab.Library) accountViewModel.refresh()
+                            player.repeatMode=Player.REPEAT_MODE_OFF
                         }
-
+                        fun createMemory() {
+                            if(backStack.lastOrNull()==HomeRoute) backStack.add(MemoryEditorRoute)
+                        }
+                        fun upload() {
+                            if(backStack.lastOrNull()==HomeRoute) { player.pause(); backStack.add(CreatorRoute) }
+                        }
                         Column {
-                            Box(modifier = Modifier.weight(1f)) {
-                                when (tab) {
-                                    MainTab.Audio -> FeedScreen(
-                                        title = "오디오",
-                                        emptyMessage = "아직 올라온 오디오가 없습니다.",
-                                        items = audio.items,
-                                        loading = audio.loading,
-                                        error = audio.error,
-                                        hasMore = audio.nextCursor != null,
-                                        notice = notice,
-                                        onOpen = ::openContent,
-                                        onRetry = { viewModel.retry(FeedKind.Audio) },
-                                        onLoadMore = { viewModel.loadMore(FeedKind.Audio) },
+                            Box(Modifier.weight(1f)) {
+                                when(tab) {
+                                    MainTab.Feed -> FeedScreen(
+                                        title="피드",emptyMessage="게시물이 없습니다.",
+                                        items=feed.items,loading=feed.loading,error=feed.error,hasMore=feed.nextCursor!=null,notice=notice,
+                                        onOpen=::openContent,onRetry={viewModel.retry(FeedKind.Audio)},onLoadMore={viewModel.loadMore(FeedKind.Audio)},
+                                        onCreateMemory=::createMemory,
+                                        searchQuery=searchQuery,onSearch=viewModel::search,format=format,onFormat=viewModel::selectFormat,
+                                        onOpenShorts={if(backStack.lastOrNull()==HomeRoute) { player.pause(); backStack.add(ShortsRoute) }},
                                     )
+                                    MainTab.Places -> NearbyScreen(nearbyViewModel,
+                                        onBack={tab=MainTab.Feed},onOpen=::openContent,notice=notice,embedded=true,
+                                        onSearchPlace={query->viewModel.search(query);tab=MainTab.Feed})
+                                    MainTab.Create -> {
+                                        // 이전 버전에서 저장된 창작 탭도 새 업로드 입구로 복원한다.
+                                        LaunchedEffect(Unit) { tab=MainTab.Feed; upload() }
+                                    }
+                                    MainTab.Subscriptions -> FeedScreen(
+                                        title="구독",emptyMessage="구독한 게시물이 없습니다.",
+                                        items=subs.items,loading=subs.loading,error=subs.error,hasMore=subs.nextCursor!=null,notice=notice,
+                                        onOpen=::openContent,
+                                        onRetry={if(subs.error==userMessage(NetException.Unauthorized())) loginPrompt=true else viewModel.retry(FeedKind.Subscribed)},
+                                        onLoadMore={viewModel.loadMore(FeedKind.Subscribed)},
+                                    )
+                                    MainTab.Library -> LibraryScreen(
+                                        history=history,saved=saved,onOpen=::openContent,account=account,
+                                        onAccount={if(backStack.lastOrNull()==HomeRoute) backStack.add(AccountRoute)},
+                                    )
+                                }
+                            }
+                            val currentId=playback.mediaId
+                            if(currentId!=null) MiniPlayer(
+                                artSeed=currentId,isVideo=playback.isVideo,title=playback.title,
+                                subtitle=metaLine(playback.creatorId,playback.isVideo,playback.aiGenerated),
+                                isPlaying=playback.isPlaying,onTogglePlay={if(playback.isPlaying) player.pause() else player.play()},
+                                onOpen={if(backStack.lastOrNull()==HomeRoute) backStack.add(PlayerRoute(currentId,playback.title,
+                                    playback.creatorId,playback.aiGenerated,playback.isVideo))},
+                            )
+                            BottomNav(selected=tab,onSelect={ next ->
+                                notice=null
+                                if(next==MainTab.Create) upload() else tab=next
+                            })
+                        }
+                    }
 
-                                    MainTab.Shorts -> ShortsScreen(
+                    is AccountRoute -> NavEntry(key) {
+                        val account by accountViewModel.state.collectAsState()
+                        AccountScreen(account.copy(busy=account.busy||signingIn),
+                            onBack={backStack.removeLastOrNull()},onLogin=::signIn,onDeveloperLogin=accountViewModel::developerSignIn,
+                            onProfile={account.userId?.let { if(backStack.lastOrNull()==AccountRoute) backStack.add(ProfileRoute(it)) }},
+                            onMoments={if(backStack.lastOrNull()==AccountRoute) backStack.add(MomentsRoute)},
+                            onBlocked={if(account.signedIn && backStack.lastOrNull()==AccountRoute) backStack.add(BlockedRoute)},
+                            onClearHistory=viewModel::clearHistory,
+                            onPermissions={
+                                try { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:${context.packageName}"))) }
+                                catch (_: android.content.ActivityNotFoundException) { toast("기기 설정을 열 수 없습니다.") }
+                            },
+                            onSignOut={player.pause();player.clearMediaItems();accountViewModel.signOut()},
+                            onRetry=accountViewModel::refresh,developerLogin=BuildConfig.DEBUG&&BuildConfig.DEV_LOGIN)
+                    }
+
+                    is ProfileRoute -> NavEntry(key) {
+                        val account by accountViewModel.state.collectAsState()
+                        if(account.userId==key.userId) ProfileEditorScreen(accountViewModel,key.userId,onBack={backStack.removeLastOrNull()})
+                        else LaunchedEffect(account.loading) {
+                            if(!account.loading && backStack.lastOrNull()==key) backStack.removeLastOrNull()
+                        }
+                    }
+
+                    is MomentsRoute -> NavEntry(key) {
+                        val album by memoryViewModel.state.collectAsState()
+                        MomentsScreen(album,memoryViewModel::photo,onBack={backStack.removeLastOrNull()},
+                            onCreate={if(backStack.lastOrNull()==MomentsRoute) backStack.add(MemoryEditorRoute)},
+                            onOpen={id->if(backStack.lastOrNull()==MomentsRoute) backStack.add(MemoryDetailRoute(id))},
+                            onRetry=memoryViewModel::reload)
+                    }
+
+                    is ShortsRoute -> NavEntry(key) {
+                        val shorts by viewModel.feed(FeedKind.Shorts).collectAsState()
+                        val subscribed by viewModel.subscribed.collectAsState()
+                        val saved by viewModel.saved.collectAsState()
+                        val savedIds=remember(saved) { saved.map { it.id }.toSet() }
+                        LaunchedEffect(shorts.stale) {
+                            viewModel.loadIfNeeded(FeedKind.Shorts)
+                            viewModel.refreshSubscriptions()
+                        }
+                        androidx.compose.runtime.DisposableEffect(player) {
+                            player.repeatMode=Player.REPEAT_MODE_ONE
+                            onDispose { player.pause(); player.repeatMode=Player.REPEAT_MODE_OFF }
+                        }
+                        Column {
+                            TextButton(onClick={backStack.removeLastOrNull()}){Text("피드로 돌아가기")}
+                            Box(Modifier.weight(1f)) {
+                                ShortsScreen(
                                         player = player,
                                         state = shorts,
                                         active = true,
@@ -244,70 +364,39 @@ fun AppNavigation(
                                             dialog = ModerationDialog.Block
                                         },
                                     )
+                            }
+                        }
+                    }
 
-                                    MainTab.Subscriptions -> FeedScreen(
-                                        title = "구독",
-                                        emptyMessage = "구독한 채널의 새 콘텐츠가 여기에 모입니다.\n마음에 드는 채널을 구독해 보세요.",
-                                        items = subs.items,
-                                        loading = subs.loading,
-                                        error = subs.error,
-                                        hasMore = subs.nextCursor != null,
-                                        notice = notice,
-                                        onOpen = ::openContent,
-                                        onRetry = {
-                                            // 로그인이 안 돼서 비어 있는 경우에는 다시 시도 대신 로그인 창을 띄운다
-                                            if (subs.error == userMessage(NetException.Unauthorized())) loginPrompt = true
-                                            else viewModel.retry(FeedKind.Subscribed)
-                                        },
-                                        onLoadMore = { viewModel.loadMore(FeedKind.Subscribed) },
-                                    )
-
-                                    MainTab.Library -> LibraryScreen(
-                                        history = history,
-                                        saved = saved,
-                                        onOpen = ::openContent,
-                                        onClearHistory = viewModel::clearHistory,
-                                        onOpenBlocked = {
-                                            if (backStack.lastOrNull() == HomeRoute) backStack.add(BlockedRoute)
-                                        },
-                                    )
+                    is MemoryEditorRoute -> NavEntry(key) {
+                        MemoryEditorScreen(memoryViewModel,onBack={backStack.removeLastOrNull()},onSave={
+                            scope.launch {
+                                val id=memoryViewModel.saveMemory()
+                                if(id!=null && backStack.lastOrNull()==MemoryEditorRoute) {
+                                    backStack.removeLastOrNull()
+                                    backStack.add(MemoryDetailRoute(id))
                                 }
                             }
-                            // 숏츠 탭에서는 영상이 화면을 채우므로 미니 플레이어를 숨긴다
-                            val currentId = playback.mediaId
-                            if (currentId != null && tab != MainTab.Shorts) {
-                                MiniPlayer(
-                                    artSeed = currentId,
-                                    isVideo = playback.isVideo,
-                                    title = playback.title,
-                                    subtitle = metaLine(playback.creatorId, playback.isVideo, playback.aiGenerated),
-                                    isPlaying = playback.isPlaying,
-                                    onTogglePlay = { if (playback.isPlaying) player.pause() else player.play() },
-                                    onOpen = {
-                                        // 이미 로드된 곡이므로 다시 불러오지 않고 화면만 연다
-                                        if (backStack.lastOrNull() == HomeRoute) {
-                                            backStack.add(
-                                                PlayerRoute(
-                                                    currentId,
-                                                    playback.title,
-                                                    playback.creatorId,
-                                                    playback.aiGenerated,
-                                                    playback.isVideo,
-                                                )
-                                            )
-                                        }
-                                    },
-                                )
-                            }
-                            BottomNav(
-                                selected = tab,
-                                onSelect = { next ->
-                                    // 숏츠를 떠나면 소리가 계속 나지 않도록 멈춘다
-                                    if (tab == MainTab.Shorts && next != MainTab.Shorts) player.pause()
-                                    tab = next
-                                },
-                            )
-                        }
+                        })
+                    }
+
+                    is MemoryDetailRoute -> NavEntry(key) {
+                        val state by memoryViewModel.state.collectAsState()
+                        val memory=state.album.memories.find { it.id==key.id }
+                        MemoryDetailScreen(memory,memory?.photoId?.let(memoryViewModel::photo),state.busy,state.error,
+                            onBack={backStack.removeLastOrNull()},
+                            onDelete={scope.launch { if(memoryViewModel.deleteMemory(key.id) && backStack.lastOrNull()==key) backStack.removeLastOrNull() }})
+                    }
+
+                    is NearbyRoute -> NavEntry(key) {
+                        NearbyScreen(nearbyViewModel, onBack = { backStack.removeLastOrNull() },
+                            onOpen = ::openContent, notice = notice)
+                    }
+
+                    is CreatorRoute -> NavEntry(key) {
+                        StreamerScreen(creatorViewModel,
+                            onBack = { backStack.removeLastOrNull() },
+                            onLogin = ::signIn)
                     }
 
                     is BlockedRoute -> NavEntry(key) {

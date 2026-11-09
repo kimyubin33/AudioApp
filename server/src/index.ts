@@ -2,11 +2,19 @@
 // 원칙: 앱은 신뢰하지 않는다. 권한 검사와 값 검증은 전부 여기서 한다.
 //       오류 응답에는 짧은 코드만 담고, 내부 정보·토큰·입력 내용은 로그에도 남기지 않는다.
 
-import { TOKEN_TTL_SECONDS, issueToken, verifyGoogleIdToken, verifyToken } from './auth';
-import type { AppEnv, UserRow } from './types';
+import { TOKEN_TTL_SECONDS, issueToken } from './auth';
+import { googleUser } from './accounts';
+import { adminContents, adminDetail, reviewContent, adminUser, creatorAccess } from './admin';
+import { webAsset, webConfig, webSession } from './web';
+import { BASE_HEADERS, HttpError, apiBase, authenticate, json, newId, noContent, nowSeconds, readJson, requireUser } from './http';
+import { completeUpload, createUpload, putUpload, listMyContents, serveMedia, cleanupUploads } from './uploads';
+import { creatorProfile, uploadStatus, cancelUpload, editCreatorContent } from './creator';
+import { nearbyContents } from './nearby';
+import type { AppEnv } from './types';
 import {
   DETAIL_MAX,
   cleanMultiline,
+  cleanText,
   isContentKind,
   isReportReason,
   isSafeHttpsUrl,
@@ -15,64 +23,8 @@ import {
   parseLimit,
 } from './validate';
 
-const MAX_BODY_BYTES = 64 * 1024;
 const MAX_BLOCKS_PER_USER = 1000;
 const MAX_SUBSCRIPTIONS_PER_USER = 500;
-
-const BASE_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' };
-
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    readonly code: string,
-  ) {
-    super(code);
-  }
-}
-
-const json = (status: number, body: unknown): Response =>
-  new Response(JSON.stringify(body), { status, headers: { ...BASE_HEADERS, 'Content-Type': 'application/json; charset=utf-8' } });
-const noContent = (): Response => new Response(null, { status: 204, headers: BASE_HEADERS });
-
-const nowSeconds = (): number => Math.floor(Date.now() / 1000);
-const newId = (prefix: string): string => `${prefix}_${crypto.randomUUID().replace(/-/g, '')}`;
-
-/** 본문을 JSON 객체로 읽는다. 너무 크거나 형식이 다르면 400. */
-async function readJson(request: Request): Promise<Record<string, unknown>> {
-  const declared = Number(request.headers.get('content-length') ?? '0');
-  if (!Number.isFinite(declared) || declared > MAX_BODY_BYTES) throw new HttpError(400, 'invalid_request');
-  if (!(request.headers.get('content-type') ?? '').toLowerCase().startsWith('application/json')) {
-    throw new HttpError(400, 'invalid_request');
-  }
-  const text = await request.text();
-  if (text.length === 0 || text.length > MAX_BODY_BYTES) throw new HttpError(400, 'invalid_request');
-  try {
-    const value: unknown = JSON.parse(text);
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
-  } catch {
-    /* 아래에서 400 */
-  }
-  throw new HttpError(400, 'invalid_request');
-}
-
-/** Authorization 헤더가 없으면 null. 있는데 잘못됐거나 만료됐으면 401 (앱이 토큰을 버리고 다시 로그인하게). */
-async function authenticate(request: Request, env: AppEnv): Promise<UserRow | null> {
-  const header = request.headers.get('Authorization');
-  if (header === null) return null;
-  const match = /^Bearer ([A-Za-z0-9._-]{1,4096})$/.exec(header);
-  if (!match) throw new HttpError(401, 'unauthorized');
-  const userId = await verifyToken(env, match[1]);
-  if (!userId) throw new HttpError(401, 'unauthorized');
-  const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(userId).first<UserRow>();
-  if (!user) throw new HttpError(401, 'unauthorized');
-  return user;
-}
-
-async function requireUser(request: Request, env: AppEnv): Promise<UserRow> {
-  const user = await authenticate(request, env);
-  if (!user) throw new HttpError(401, 'unauthorized');
-  return user;
-}
 
 // ───────────────────────── 콘텐츠 ─────────────────────────
 
@@ -99,10 +51,10 @@ const toSummary = (r: ContentRow) => ({
   ai_tool: r.ai_tool,
 });
 
-function streamUrl(env: AppEnv, r: ContentRow): string | null {
+function streamUrl(request: Request, env: AppEnv, r: ContentRow): string | null {
   let url: string | null = null;
   if (r.external_url) url = r.external_url;
-  else if (r.object_key && env.MEDIA_BASE_URL) url = `${env.MEDIA_BASE_URL.replace(/\/+$/, '')}/${r.object_key.split('/').map(encodeURIComponent).join('/')}`;
+  else if (r.object_key) return `${apiBase(request, env)}/v1/contents/${r.id}/media`;
   return url !== null && isSafeHttpsUrl(url) ? url : null;
 }
 
@@ -132,6 +84,19 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
   // 공개(approved)된 것만. 로그인한 사용자가 차단한 크리에이터의 콘텐츠는 뺀다.
   const where = ["c.status = 'approved'"];
   const binds: (string | number)[] = [];
+  const query = params.get('q');
+  if (query !== null) {
+    const text = cleanText(query, 100);
+    if (!text) throw new HttpError(400, 'invalid_request');
+    // 메타데이터 중 공개용 설명·태그·장소만 검색한다. 권리자의 비공개 진술은 검색하지 않는다.
+    const needle = '%' + text.replace(/[\\%_]/g, '\\$&') + '%';
+    where.push(`(c.title LIKE ? ESCAPE '\\' OR c.creator_id LIKE ? ESCAPE '\\'
+      OR json_extract(c.submission_json, '$.description') LIKE ? ESCAPE '\\'
+      OR json_extract(c.submission_json, '$.tags') LIKE ? ESCAPE '\\'
+      OR json_extract(c.submission_json, '$.location.name') LIKE ? ESCAPE '\\'
+      OR json_extract(c.submission_json, '$.location.character') LIKE ? ESCAPE '\\')`);
+    binds.push(needle, needle, needle, needle, needle, needle);
+  }
   if (kind !== null) {
     where.push('c.kind = ?');
     binds.push(kind);
@@ -177,7 +142,7 @@ async function contentDetail(id: string, request: Request, env: AppEnv): Promise
     .bind(id)
     .first<ContentRow>();
   if (!row) throw new HttpError(404, 'not_found');
-  const url = streamUrl(env, row);
+  const url = streamUrl(request, env, row);
   if (!url) throw new HttpError(404, 'not_found'); // 재생 주소가 없거나 안전하지 않으면 내보내지 않는다
   return json(200, { ...toSummary(row), stream_url: url });
 }
@@ -215,25 +180,7 @@ async function listSubscriptions(request: Request, env: AppEnv): Promise<Respons
 // ───────────────────────── 로그인 ─────────────────────────
 
 async function signInWithGoogle(request: Request, env: AppEnv): Promise<Response> {
-  const body = await readJson(request);
-  const idToken = body.id_token;
-  if (typeof idToken !== 'string' || idToken.length === 0) throw new HttpError(400, 'invalid_request');
-
-  let sub: string | null;
-  try {
-    sub = await verifyGoogleIdToken(env, idToken);
-  } catch (e) {
-    console.error('google verification unavailable', e instanceof Error ? e.name : 'unknown');
-    throw new HttpError(503, 'unavailable');
-  }
-  if (!sub) throw new HttpError(401, 'unauthorized');
-
-  await env.DB.prepare('INSERT INTO users (id, google_sub, role, created_at) VALUES (?1, ?2, ?3, ?4) ON CONFLICT(google_sub) DO NOTHING')
-    .bind(newId('u'), sub, 'user', nowSeconds())
-    .run();
-  const user = await env.DB.prepare('SELECT id FROM users WHERE google_sub = ?1').bind(sub).first<{ id: string }>();
-  if (!user) throw new HttpError(500, 'server_error');
-
+  const user = await googleUser(request, env);
   return json(200, { access_token: await issueToken(env, user.id), expires_in_seconds: TOKEN_TTL_SECONDS });
 }
 
@@ -303,7 +250,31 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
   const method = request.method;
 
   if (pathname === '/healthz' && method === 'GET') return json(200, { ok: true });
+  if (pathname === '/v1/web/config' && method === 'GET') return webConfig(request, env);
+  if (pathname === '/v1/web/session' && ['GET','POST','DELETE'].includes(method)) return webSession(request, env);
+  if (pathname === '/v1/admin/contents' && method === 'GET') return adminContents(request, env);
+  if (pathname === '/v1/admin/user' && method === 'GET') return adminUser(request, env);
+  const review = /^\/v1\/admin\/contents\/([^/]+)(\/review)?$/.exec(pathname);
+  if (review && method === 'GET' && !review[2]) return adminDetail(review[1],request,env);
+  if (review && method === 'POST' && review[2]) return reviewContent(review[1],request,env);
+  const access = /^\/v1\/admin\/creators\/([^/]+)$/.exec(pathname);
+  if (access && method === 'POST') return creatorAccess(access[1],request,env);
 
+  if (pathname === '/v1/me' && method === 'GET') return creatorProfile(request, env);
+  const status = /^\/v1\/uploads\/([^/]+)$/.exec(pathname);
+  if (status && method === 'GET') return uploadStatus(status[1], request, env);
+  if (status && method === 'DELETE') return cancelUpload(status[1], request, env);
+  const edit = /^\/v1\/me\/contents\/([^/]+)$/.exec(pathname);
+  if (edit && method === 'PATCH') return editCreatorContent(edit[1], request, env);
+  if (pathname === '/v1/uploads' && method === 'POST') return createUpload(request, env);
+  if (pathname === '/v1/me/contents' && method === 'GET') return listMyContents(request, env);
+  const upload = /^\/v1\/uploads\/([^/]+)\/(file|complete)$/.exec(pathname);
+  if (upload && upload[2] === 'file' && method === 'PUT') return putUpload(upload[1], request, env);
+  if (upload && upload[2] === 'complete' && method === 'POST') return completeUpload(upload[1], request, env);
+  const media = /^\/v1\/(contents|me\/contents)\/([^/]+)\/media$/.exec(pathname);
+  if (media && (method === 'GET' || method === 'HEAD')) return serveMedia(media[2], request, env, media[1] !== 'contents');
+
+  if (pathname === '/v1/discovery/nearby' && method === 'POST') return nearbyContents(request, env);
   if (pathname === '/v1/contents' && method === 'GET') return listContents(request, env);
   if (pathname === '/v1/auth/google' && method === 'POST') return signInWithGoogle(request, env);
   if (pathname === '/v1/reports' && method === 'POST') return createReport(request, env);
@@ -321,10 +292,15 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
   if (m && method === 'PUT') return blockCreator(m[1], request, env);
   if (m && method === 'DELETE') return unblockCreator(m[1], request, env);
 
+  const asset = await webAsset(request, env);
+  if (asset) return asset;
   throw new HttpError(404, 'not_found');
 }
 
 export default {
+  async scheduled(_event: ScheduledController, env: AppEnv): Promise<void> {
+    await cleanupUploads(env);
+  },
   async fetch(request: Request, env: AppEnv): Promise<Response> {
     try {
       return await route(request, env);

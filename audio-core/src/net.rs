@@ -66,6 +66,12 @@ pub enum NetError {
     Network,
     /// 401: 로그인이 필요하거나 토큰이 만료됨
     Unauthorized,
+    /// 403: 크리에이터 권한 없음
+    Forbidden,
+    /// 409: 수정/업로드 상태 충돌
+    Conflict,
+    /// 410: 업로드 만료
+    UploadExpired,
     /// 404
     NotFound,
     /// 429
@@ -88,6 +94,9 @@ impl fmt::Display for NetError {
             Self::DevCertificateNotAllowed => "개발용 인증서는 로컬 주소에서만 사용할 수 있습니다",
             Self::Network => "서버에 연결할 수 없습니다",
             Self::Unauthorized => "로그인이 필요합니다",
+            Self::Forbidden => "승인된 크리에이터만 업로드할 수 있습니다",
+            Self::Conflict => "상태가 변경되었습니다. 새로고침해 주세요",
+            Self::UploadExpired => "업로드가 만료되었습니다",
             Self::NotFound => "찾을 수 없습니다",
             Self::RateLimited => "요청이 너무 많습니다. 잠시 후 다시 시도하세요",
             Self::ServerError => "서버에 문제가 있습니다",
@@ -162,11 +171,15 @@ fn is_dev_host(url: &reqwest::Url) -> bool {
 }
 
 /// HTTP 상태 코드를 오류로 바꾼다. 200대만 성공으로 본다.
-fn check_status(status: u16) -> Result<(), NetError> {
+pub(crate) fn check_status(status: u16) -> Result<(), NetError> {
     match status {
         200..=299 => Ok(()),
         401 => Err(NetError::Unauthorized),
+        400 | 411 | 413 => Err(NetError::InvalidRequest),
+        403 => Err(NetError::Forbidden),
         404 => Err(NetError::NotFound),
+        409 => Err(NetError::Conflict),
+        410 => Err(NetError::UploadExpired),
         429 => Err(NetError::RateLimited),
         500..=599 => Err(NetError::ServerError),
         // 3xx(리다이렉트는 따라가지 않음), 그 외 4xx 등
@@ -177,9 +190,9 @@ fn check_status(status: u16) -> Result<(), NetError> {
 /// 서버와 통신하는 객체.
 #[derive(uniffi::Object)]
 pub struct ApiClient {
-    base_url: reqwest::Url,
-    tokens: Arc<dyn TokenStore>,
-    http: reqwest::Client,
+    pub(crate) base_url: reqwest::Url,
+    pub(crate) tokens: Arc<dyn TokenStore>,
+    pub(crate) http: reqwest::Client,
 }
 
 #[uniffi::export]
@@ -250,6 +263,17 @@ impl ApiClient {
             self.get_with_optional_login(&path).await?
         };
         Ok(parse_content_page(body)?)
+    }
+
+    /// 공개된 AI 오디오·쇼츠를 제목·설명·태그·장소로 검색한다.
+    pub async fn search_contents(&self, query: String, limit: u32, cursor: Option<String>) -> Result<ContentPage, NetError> {
+        let query = query.trim();
+        if !crate::validation::is_clean_text(query, 100) { return Err(NetError::InvalidRequest); }
+        let path = list_contents_path(limit, cursor, None, false)?;
+        let mut url = self.base_url.join(&path).map_err(|_| NetError::InvalidRequest)?;
+        url.query_pairs_mut().append_pair("q", query);
+        let path = format!("{}?{}", url.path(), url.query().unwrap_or_default());
+        Ok(parse_content_page(self.get_with_optional_login(&path).await?)?)
     }
 
     /// 콘텐츠 한 건의 상세와 재생 주소를 가져온다.
@@ -330,7 +354,7 @@ impl ApiClient {
 
 /// 요청에 로그인 토큰을 어떻게 쓸지
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Auth {
+pub(crate) enum Auth {
     /// 토큰을 보내지 않는다 (로그인 요청 자체)
     None,
     /// 토큰이 있으면 보낸다 (목록·상세처럼 로그인 없이도 되는 요청)
@@ -352,7 +376,7 @@ impl ApiClient {
 
     /// 요청을 보내고 본문을 문자열로 돌려준다. (204처럼 본문이 없으면 빈 문자열)
     /// 본문 크기는 [`MAX_BODY_BYTES`]로 제한한다.
-    async fn request(&self, method: Method, path: &str, body: Option<String>, auth: Auth) -> Result<String, NetError> {
+    pub(crate) async fn request(&self, method: Method, path: &str, body: Option<String>, auth: Auth) -> Result<String, NetError> {
         let url = self.base_url.join(path).map_err(|_| NetError::InvalidRequest)?;
         // 경로 때문에 다른 서버로 가게 되는 일이 없도록 한 번 더 확인
         if url.scheme() != "https" || url.host_str() != self.base_url.host_str() || url.port() != self.base_url.port() {
@@ -603,6 +627,9 @@ mod tests {
         assert_eq!(check_status(429), Err(NetError::RateLimited));
         assert_eq!(check_status(503), Err(NetError::ServerError));
         assert_eq!(check_status(302), Err(NetError::InvalidResponse));
-        assert_eq!(check_status(400), Err(NetError::InvalidResponse));
+        assert_eq!(check_status(400), Err(NetError::InvalidRequest));
+        assert_eq!(check_status(403), Err(NetError::Forbidden));
+        assert_eq!(check_status(409), Err(NetError::Conflict));
+        assert_eq!(check_status(410), Err(NetError::UploadExpired));
     }
 }

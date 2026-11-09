@@ -10,12 +10,21 @@
     "db:seed": "wrangler d1 execute audioapp --local --file=seed/dev-seed.sql",
     "db:reset": "node scripts/reset-local-db.mjs",
     "types": "wrangler types",
-    "check": "tsc --noEmit",
-    "test": "node --test test/*.test.mjs",
-    "smoke": "node scripts/smoke.mjs"
+    "check": "tsc --noEmit && tsc -p web/tsconfig.json",
+    "test": "npm run web:build && node --test test/*.test.mjs",
+    "web:build": "node scripts/build-web.mjs",
+    "web:test": "npm run web:build && playwright test",
+    "smoke": "node scripts/smoke.mjs",
+    "admin": "node scripts/admin.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "esbuild": "^0.28.2",
     "typescript": "^5.9.0",
     "wrangler": "^4.158.0"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0",
+    "fflate": "^0.8.3"
   }
 }

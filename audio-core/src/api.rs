@@ -84,7 +84,7 @@ impl std::error::Error for ApiError {}
 // ───────────────────────── 서버가 보내는 JSON 모양 (내부용) ─────────────────────────
 
 #[derive(Deserialize)]
-struct WireItem {
+pub(crate) struct WireItem {
     id: String,
     title: String,
     creator_id: String,
@@ -120,14 +120,14 @@ struct WireSession {
     expires_in_seconds: u32,
 }
 
-fn parse_json<'a, T: Deserialize<'a>>(body: &'a str) -> Result<T, ApiError> {
+pub(crate) fn parse_json<'a, T: Deserialize<'a>>(body: &'a str) -> Result<T, ApiError> {
     if body.len() > MAX_BODY_BYTES {
         return Err(ApiError::ResponseTooLarge);
     }
     serde_json::from_str(body).map_err(|_| ApiError::InvalidResponse)
 }
 
-fn to_item(w: WireItem) -> Result<ContentItem, ApiError> {
+pub(crate) fn to_item(w: WireItem) -> Result<ContentItem, ApiError> {
     if !is_valid_id(&w.id) {
         return Err(ApiError::InvalidResponse);
     }

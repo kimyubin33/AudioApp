@@ -1,8 +1,12 @@
-# AI 오디오 플랫폼 앱
+# AI & ME · 추억 앨범
 
-외부 AI 도구로 만든 오디오·숏폼 영상을 승인된 크리에이터가 올리고, 사용자가 감상하는 플랫폼입니다.
-앱 안에 AI 생성 기능은 없습니다. 안드로이드가 1순위이고 iOS는 나중입니다.
-디자인은 흰 배경 + 검정, 극도로 단순하게.
+사진·글·오디오·쇼츠를 남기고 감상하는 Android 앱입니다.
+장소와 차량은 추억을 다시 발견하고 감상하는 통로입니다. 차량에서 인기 게시물의 오디오를 추천하는 방향도 유지합니다.
+현재 공개 콘텐츠는 기존 크리에이터 업로드·검수 플랫폼을 이용하고, 새 사진·글 추억은 이 기기의 비공개 앨범에 저장합니다.
+카메라 편집은 **Moment**, 보관함은 **Saved / History**입니다. 보관함의 원형 계정 버튼에서 로그인·프로필·차단 목록·설정을 엽니다. 프로필 이름·사진은 계정별로 이 기기에 저장합니다.
+선택형 ‘꾸며보기’는 외부 AI용 프롬프트 복사와 후보 글 비교를 제공합니다.
+[추억 앨범 구현 범위와 다음 서버 단계](docs/memory-album.md). Android가 우선이고 iOS는 후속입니다.
+화면은 소개 문구 없이 벡터 심볼과 콘텐츠를 중심으로 구성합니다. **피드·지도·+ 창작·구독·보관함**을 사용하며, + 창작은 스트리머 모드를 바로 엽니다.
 
 ## 구조
 
@@ -10,7 +14,7 @@
 |---|---|
 | `audio-core/` | Rust 코어. 입력 검증, 서버 통신, 비즈니스 규칙. OS에 의존하지 않아서 나중에 iOS에서 재사용 |
 | `android/` | Kotlin + Jetpack Compose. 화면, Media3 재생, Keystore 같은 OS 기능 |
-| `server/` | **실제 서버**: Cloudflare Workers + D1 (TypeScript). `docs/api-v1.md`를 구현. 로컬에서도 그대로 돌아간다 |
+| `server/` | **실제 서버**: Cloudflare Workers + D1 + 비공개 R2 (TypeScript). `docs/api-v1.md`를 구현. 로컬에서도 그대로 돌아간다 |
 | `dev-server/` | 개발용 도구 (Python): `tls_proxy.py`는 로컬 서버에 HTTPS를 입혀 앱이 붙게 한다, `mock_server.py`는 서버 없이 쓰는 가짜 서버(예비) |
 | `docs/api-v1.md` | 서버 API 명세 (앱이 서버에 요구하는 것) |
 | `scripts/build_android.py` | Rust → 안드로이드 라이브러리 + Kotlin 바인딩 생성 |
@@ -57,7 +61,7 @@ cargo test live_mock_server -- --ignored --nocapture      # (서버+tls_proxy �
 - Kotlin → Rust, **서버 → Rust로 들어오는 모든 값**을 Rust에서 다시 검증한다 (길이, 형식, 범위, https 주소).
 - Rust에서 `unwrap()`/`expect()`를 남발하지 않고 오류는 `Result`로 Kotlin에 전달한다. `[profile.release]`에 `panic = "abort"`를 넣지 않는다.
 - 로그에 토큰·개인정보·경로를 남기지 않는다.
-- 모든 콘텐츠에 "AI 생성" 표시 필드를 둔다. 신고·차단 기능이 앱 안에 있다.
+- AI 생성 콘텐츠에는 생성 여부를 표시한다. 사진·글 추억을 자동으로 AI 생성으로 분류하지 않는다. 공개 콘텐츠의 신고·차단 기능이 앱 안에 있다.
 - 새 의존성은 이유를 설명하고, 널리 쓰이고 관리가 활발한 것만 쓴다.
 
 ## 이 프로젝트에서 겪은 함정
@@ -70,11 +74,13 @@ cargo test live_mock_server -- --ignored --nocapture      # (서버+tls_proxy �
 - **로컬 서버는 `.dev.vars`의 `DEV_MODE=1`일 때만 'dev-id-token' 가짜 로그인을 받는다.** 배포 환경에는 절대 설정하지 않는다 (`wrangler secret`으로는 TOKEN_SECRET·GOOGLE_CLIENT_ID만).
 - **Navigation 3의 화면 내용(`NavEntry`)은 값을 붙잡는다.** 바뀌는 상태는 값이 아니라 `State`/`StateFlow`로 넘겨서 화면 안에서 읽어야 갱신된다 (`homeState`가 그 예).
 - **에뮬레이터의 H.264 디코더(`c2.goldfish.h264.decoder`)가 영상 재생에 실패할 수 있다.** 오디오는 정상. 영상은 실제 기기에서 확인할 것.
+- **UniFFI 바인딩은 `audio-core/uniffi.toml`의 `android = true`로 생성한다.** Android API 가드와 구형 기기용 JNA Cleaner 폴백이 필요하다. 생성된 Kotlin 파일을 직접 수정하지 않는다.
+- **Windows PATH에 따옴표가 있으면 Gradle 테스트 JVM이 시작되지 않을 수 있다.** 이때는 해당 PowerShell 실행에서만 각 PATH 항목의 따옴표를 제거하고 `--no-daemon`으로 검증한다.
 - `release` 프로필은 LTO라서 `uniffi-bindgen`까지 같이 빌드하면 매우 느리다. 빌드 스크립트가 `--lib`만 빌드하는 이유.
 
 ## 지금 상태
 
-완료: 콘텐츠 모델·검증, 서버 응답 검증, HTTPS 요청, Keystore 토큰 보관소, 목록/재생/백그라운드 재생/미니 플레이어, 영상 재생 화면, 신고·차단·차단 관리, 목업 서버, release 빌드 점검.
+완료: 콘텐츠 모델·검증, 서버 응답 검증, HTTPS 요청, Keystore 토큰 보관소, 목록/재생/백그라운드 재생/미니 플레이어, 영상 재생 화면, 신고·차단·차단 관리, 목업 서버, release 빌드 점검. 서버 크리에이터 업로드 API·비공개 R2 저장·승인 CLI도 구현했습니다. [업로드·승인 운영 안내](docs/creator-uploads.md). Android에서는 하단 **+ 창작**의 스트리머 모드로 여러 미디어·ZIP 가져오기, 원본 확인·미리 재생, 정보·권리·선택적 장소 검토, 초안 저장과 검수 제출·반려 후 정보 수정까지 이용합니다. 선택적 **주변 이야기**에서 스마트폰 위치로 승인된 장소 콘텐츠와 캐릭터를 발견하고 기존 플레이어로 감상할 수 있습니다. [위치 동작·검증·연동 범위](docs/nearby-discovery.md). 같은 서버의 `/creator`에서 웹 업로드, `/admin`에서 운영자 검수·크리에이터 권한 관리·심사 이력을 이용합니다. [웹 스튜디오 안내](docs/web-studio.md). 실제 차량 GPS 수신·차량↔스마트폰 전환은 기업의 SDK/API 제공까지 보류합니다.
 
 ## 정해진 것
 

@@ -1,0 +1,3 @@
+[bindings.kotlin]
+# Android용 API 가드와 SystemCleaner/JNA 폴백을 생성한다 (minSdk 26).
+android = true
