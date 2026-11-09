@@ -13,8 +13,9 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue};
 
 use crate::api::{
     ApiError, ContentDetail, ContentPage, MAX_BODY_BYTES, block_path, content_detail_path, is_valid_id_token,
-    list_contents_path, parse_blocked_list, parse_content_detail, parse_content_page, parse_session,
+    list_contents_path, parse_content_detail, parse_content_page, parse_creator_id_list, parse_session, subscription_path,
 };
+use crate::content::ContentKind;
 use crate::moderation::{ReportReason, create_report, report_to_json, validate_block_target};
 
 const URL_MAX_CHARS: usize = 2048;
@@ -231,10 +232,23 @@ impl ApiClient {
 
 #[uniffi::export(async_runtime = "tokio")]
 impl ApiClient {
-    /// 콘텐츠 목록 한 페이지를 가져온다. (로그인 없이도 가능, 로그인돼 있으면 토큰을 함께 보낸다)
-    pub async fn list_contents(&self, limit: u32, cursor: Option<String>) -> Result<ContentPage, NetError> {
-        let path = list_contents_path(limit, cursor)?;
-        let body = self.get_with_optional_login(&path).await?;
+    /// 콘텐츠 목록 한 페이지를 가져온다.
+    /// - `kind`: 오디오만 / 숏폼 영상만 (None이면 모두)
+    /// - `subscribed_only`: 구독한 채널의 콘텐츠만. 로그인이 필요하다 (토큰이 없으면 요청을 보내지 않고 `Unauthorized`)
+    /// 그 외에는 로그인 없이도 되고, 로그인돼 있으면 토큰을 함께 보낸다.
+    pub async fn list_contents(
+        &self,
+        limit: u32,
+        cursor: Option<String>,
+        kind: Option<ContentKind>,
+        subscribed_only: bool,
+    ) -> Result<ContentPage, NetError> {
+        let path = list_contents_path(limit, cursor, kind, subscribed_only)?;
+        let body = if subscribed_only {
+            self.request(Method::GET, &path, None, Auth::Required).await?
+        } else {
+            self.get_with_optional_login(&path).await?
+        };
         Ok(parse_content_page(body)?)
     }
 
@@ -282,7 +296,27 @@ impl ApiClient {
     /// 내가 차단한 크리에이터 id 목록. (로그인 필요)
     pub async fn list_blocked_creators(&self) -> Result<Vec<String>, NetError> {
         let body = self.request(Method::GET, "/v1/blocks", None, Auth::Required).await?;
-        Ok(parse_blocked_list(body)?)
+        Ok(parse_creator_id_list(body)?)
+    }
+
+    /// 크리에이터(채널)를 구독한다. (로그인 필요) 이미 구독 중이어도 성공.
+    pub async fn subscribe_creator(&self, creator_id: String) -> Result<(), NetError> {
+        let path = subscription_path(&creator_id)?;
+        self.request(Method::PUT, &path, None, Auth::Required).await?;
+        Ok(())
+    }
+
+    /// 구독을 해제한다. (로그인 필요)
+    pub async fn unsubscribe_creator(&self, creator_id: String) -> Result<(), NetError> {
+        let path = subscription_path(&creator_id)?;
+        self.request(Method::DELETE, &path, None, Auth::Required).await?;
+        Ok(())
+    }
+
+    /// 내가 구독한 크리에이터 id 목록. (로그인 필요)
+    pub async fn list_subscribed_creators(&self) -> Result<Vec<String>, NetError> {
+        let body = self.request(Method::GET, "/v1/subscriptions", None, Auth::Required).await?;
+        Ok(parse_creator_id_list(body)?)
     }
 
     /// 차단을 푼다. (로그인 필요)
@@ -474,14 +508,14 @@ mod tests {
                     }
                 }
             }
-            let page = client.list_contents(1, None).await;
+            let page = client.list_contents(1, None, None, false).await;
             println!("list_contents: {page:?}");
             assert!(page.is_ok());
 
             // 오래돼서 서버가 거부하는 토큰이 남아 있어도, 로그인 없이 볼 수 있는 목록은 막히지 않아야 한다
             tokens.save_token("stale.token.value".into()).unwrap();
             assert_eq!(client.has_session(), Ok(true));
-            assert!(client.list_contents(1, None).await.is_ok(), "오래된 토큰 때문에 목록이 막힘");
+            assert!(client.list_contents(1, None, None, false).await.is_ok(), "오래된 토큰 때문에 목록이 막힘");
             assert_eq!(client.has_session(), Ok(false), "거부된 토큰은 지워져야 함");
 
             // 로그인·신고·차단 전체 흐름 (개발용 서버는 ID 토큰 'dev-id-token' 만 받는다)
@@ -500,14 +534,29 @@ mod tests {
                 .unwrap();
 
             let ids = |p: ContentPage| p.items.into_iter().map(|i| i.id).collect::<Vec<_>>();
-            let before = ids(client.list_contents(20, None).await.unwrap());
+            let before = ids(client.list_contents(20, None, None, false).await.unwrap());
             assert!(before.contains(&"sample-3".to_string()));
             client.block_creator("creator_02".into()).await.unwrap();
             assert_eq!(client.list_blocked_creators().await, Ok(vec!["creator_02".to_string()]));
-            let after = ids(client.list_contents(20, None).await.unwrap());
+            let after = ids(client.list_contents(20, None, None, false).await.unwrap());
             assert!(!after.contains(&"sample-3".to_string()), "차단한 크리에이터의 곡이 목록에 남아 있음");
             client.unblock_creator("creator_02".into()).await.unwrap();
-            let restored = ids(client.list_contents(20, None).await.unwrap());
+            let restored = ids(client.list_contents(20, None, None, false).await.unwrap());
+            assert!(restored.contains(&"sample-3".to_string()));
+
+            // 종류 필터와 구독 (오디오 탭 / 숏츠 탭 / 구독 탭)
+            let audio = client.list_contents(20, None, Some(ContentKind::Audio), false).await.unwrap();
+            assert!(audio.items.iter().all(|i| i.content.kind == ContentKind::Audio) && !audio.items.is_empty());
+            let videos = client.list_contents(20, None, Some(ContentKind::ShortVideo), false).await.unwrap();
+            assert!(videos.items.iter().all(|i| i.content.kind == ContentKind::ShortVideo) && !videos.items.is_empty());
+            client.unsubscribe_creator("creator_01".into()).await.unwrap();
+            assert_eq!(client.list_subscribed_creators().await, Ok(vec![]));
+            assert!(client.list_contents(20, None, None, true).await.unwrap().items.is_empty());
+            client.subscribe_creator("creator_01".into()).await.unwrap();
+            assert_eq!(client.list_subscribed_creators().await, Ok(vec!["creator_01".to_string()]));
+            let subscribed = client.list_contents(20, None, None, true).await.unwrap();
+            assert!(!subscribed.items.is_empty() && subscribed.items.iter().all(|i| i.content.creator_id == "creator_01"));
+            client.unsubscribe_creator("creator_01".into()).await.unwrap();
             assert!(restored.contains(&"sample-3".to_string()));
 
             client.sign_out().unwrap();
@@ -525,6 +574,12 @@ mod tests {
             assert_eq!(client.block_creator("creator_02".into()).await, Err(NetError::Unauthorized));
             assert_eq!(client.unblock_creator("creator_02".into()).await, Err(NetError::Unauthorized));
             assert_eq!(client.list_blocked_creators().await, Err(NetError::Unauthorized));
+            assert_eq!(client.subscribe_creator("creator_01".into()).await, Err(NetError::Unauthorized));
+            assert_eq!(client.unsubscribe_creator("creator_01".into()).await, Err(NetError::Unauthorized));
+            assert_eq!(client.list_subscribed_creators().await, Err(NetError::Unauthorized));
+            // 구독 탭 목록은 로그인 없이는 요청을 보내지 않는다
+            assert!(matches!(client.list_contents(20, None, None, true).await, Err(NetError::Unauthorized)));
+            assert_eq!(client.subscribe_creator("../x".into()).await, Err(NetError::InvalidRequest));
             assert_eq!(
                 client.report_content("c_1".into(), ReportReason::Spam, None).await,
                 Err(NetError::Unauthorized)

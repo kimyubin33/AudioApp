@@ -199,9 +199,9 @@ pub fn parse_session(body: String) -> Result<Session, ApiError> {
     })
 }
 
-/// `GET /v1/blocks` 응답(차단한 크리에이터 id 목록)을 해석한다.
+/// `GET /v1/blocks`, `GET /v1/subscriptions` 응답(크리에이터 id 목록)을 해석한다.
 #[uniffi::export]
-pub fn parse_blocked_list(body: String) -> Result<Vec<String>, ApiError> {
+pub fn parse_creator_id_list(body: String) -> Result<Vec<String>, ApiError> {
     let wire: WireBlocked = parse_json(&body)?;
     if wire.creator_ids.len() > MAX_BLOCKED || !wire.creator_ids.iter().all(|id| is_valid_id(id)) {
         return Err(ApiError::InvalidResponse);
@@ -211,15 +211,33 @@ pub fn parse_blocked_list(body: String) -> Result<Vec<String>, ApiError> {
 
 /// 목록 요청 주소를 만든다. 커서는 서버가 준 값이라도 안전한 문자만 허용한다.
 #[uniffi::export]
-pub fn list_contents_path(limit: u32, cursor: Option<String>) -> Result<String, ApiError> {
+pub fn list_contents_path(
+    limit: u32,
+    cursor: Option<String>,
+    kind: Option<ContentKind>,
+    subscribed_only: bool,
+) -> Result<String, ApiError> {
     if limit == 0 || limit > MAX_LIMIT {
         return Err(ApiError::InvalidRequest);
     }
-    match cursor {
-        None => Ok(format!("/v1/contents?limit={limit}")),
-        Some(c) if is_valid_cursor(&c) => Ok(format!("/v1/contents?limit={limit}&cursor={c}")),
-        Some(_) => Err(ApiError::InvalidRequest),
+    let mut path = format!("/v1/contents?limit={limit}");
+    if let Some(kind) = kind {
+        let kind = match kind {
+            ContentKind::Audio => "audio",
+            ContentKind::ShortVideo => "short_video",
+        };
+        path.push_str(&format!("&kind={kind}"));
     }
+    if subscribed_only {
+        path.push_str("&subscribed=1");
+    }
+    if let Some(c) = cursor {
+        if !is_valid_cursor(&c) {
+            return Err(ApiError::InvalidRequest);
+        }
+        path.push_str(&format!("&cursor={c}"));
+    }
+    Ok(path)
 }
 
 /// 차단 요청 주소를 만든다. (`PUT`/`DELETE`)
@@ -228,6 +246,14 @@ pub(crate) fn block_path(creator_id: &str) -> Result<String, ApiError> {
         return Err(ApiError::InvalidRequest);
     }
     Ok(format!("/v1/blocks/{creator_id}"))
+}
+
+/// 구독 요청 주소를 만든다. (`PUT`/`DELETE`)
+pub(crate) fn subscription_path(creator_id: &str) -> Result<String, ApiError> {
+    if !is_valid_id(creator_id) {
+        return Err(ApiError::InvalidRequest);
+    }
+    Ok(format!("/v1/subscriptions/{creator_id}"))
 }
 
 /// Google ID 토큰으로 보낼 수 있는 값인가: 출력 가능한 ASCII만, 최대 4096바이트. (JWT는 이 범위에 든다)
@@ -359,19 +385,19 @@ mod tests {
 
     #[test]
     fn blocked_list_rules() {
-        let ok = parse_blocked_list(r#"{"creator_ids":["creator_02","c-3"]}"#.into()).unwrap();
+        let ok = parse_creator_id_list(r#"{"creator_ids":["creator_02","c-3"]}"#.into()).unwrap();
         assert_eq!(ok, vec!["creator_02", "c-3"]);
-        assert_eq!(parse_blocked_list(r#"{"creator_ids":[]}"#.into()).unwrap(), Vec::<String>::new());
+        assert_eq!(parse_creator_id_list(r#"{"creator_ids":[]}"#.into()).unwrap(), Vec::<String>::new());
         for bad in [
             r#"{"creator_ids":["../x"]}"#,
             r#"{"creator_ids":[1]}"#,
             r#"{}"#,
             "not json",
         ] {
-            assert_eq!(parse_blocked_list(bad.into()), Err(ApiError::InvalidResponse), "{bad}");
+            assert_eq!(parse_creator_id_list(bad.into()), Err(ApiError::InvalidResponse), "{bad}");
         }
         let many = format!(r#"{{"creator_ids":[{}]}}"#, vec!["\"a\""; MAX_BLOCKED + 1].join(","));
-        assert_eq!(parse_blocked_list(many), Err(ApiError::InvalidResponse));
+        assert_eq!(parse_creator_id_list(many), Err(ApiError::InvalidResponse));
     }
 
     #[test]
@@ -386,14 +412,24 @@ mod tests {
 
     #[test]
     fn request_paths() {
-        assert_eq!(list_contents_path(20, None).unwrap(), "/v1/contents?limit=20");
+        assert_eq!(list_contents_path(20, None, None, false).unwrap(), "/v1/contents?limit=20");
         assert_eq!(
-            list_contents_path(20, Some("abc_1".into())).unwrap(),
+            list_contents_path(10, None, Some(ContentKind::ShortVideo), false).unwrap(),
+            "/v1/contents?limit=10&kind=short_video"
+        );
+        assert_eq!(
+            list_contents_path(10, Some("1.a".into()), Some(ContentKind::Audio), true).unwrap(),
+            "/v1/contents?limit=10&kind=audio&subscribed=1&cursor=1.a"
+        );
+        assert_eq!(subscription_path("creator_01").unwrap(), "/v1/subscriptions/creator_01");
+        assert_eq!(subscription_path("../x"), Err(ApiError::InvalidRequest));
+        assert_eq!(
+            list_contents_path(20, Some("abc_1".into()), None, false).unwrap(),
             "/v1/contents?limit=20&cursor=abc_1"
         );
-        assert_eq!(list_contents_path(0, None), Err(ApiError::InvalidRequest));
-        assert_eq!(list_contents_path(51, None), Err(ApiError::InvalidRequest));
-        assert_eq!(list_contents_path(10, Some("a&b".into())), Err(ApiError::InvalidRequest));
+        assert_eq!(list_contents_path(0, None, None, false), Err(ApiError::InvalidRequest));
+        assert_eq!(list_contents_path(51, None, None, false), Err(ApiError::InvalidRequest));
+        assert_eq!(list_contents_path(10, Some("a&b".into()), None, false), Err(ApiError::InvalidRequest));
         assert_eq!(content_detail_path("c_1".into()).unwrap(), "/v1/contents/c_1");
         assert_eq!(content_detail_path("../admin".into()), Err(ApiError::InvalidRequest));
     }
