@@ -4,6 +4,10 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+// Google 웹 클라이언트 ID (공개돼도 되는 식별자). 저장소에 넣지 않고 ~/.gradle/gradle.properties 의
+// googleWebClientId=... 로 둔다. 없으면 빈 값이고, 앱은 "로그인 설정이 안 됨"으로 안내한다.
+val googleWebClientId = providers.gradleProperty("googleWebClientId").orElse("").get()
+
 android {
     namespace = "com.kimyubin33.audioapp"
     compileSdk {
@@ -18,6 +22,7 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
     }
 
     buildTypes {
@@ -55,6 +60,9 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.credentials.core)
+    implementation(libs.credentials.play)
+    implementation(libs.googleid)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.session)

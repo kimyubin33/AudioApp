@@ -12,6 +12,9 @@ media3 = "1.11.1"
 navigation3 = "1.2.1"
 # Kotlin 2.2.x 컴파일러가 읽을 수 있는 최신 계열. 1.10 이상은 더 새 Kotlin 기본 라이브러리를 요구한다.
 kotlinxSerialization = "1.9.0"
+credentials = "1.6.0"
+# 1.2.x는 Kotlin 2.4로 만들어져 이 프로젝트의 Kotlin 2.2 컴파일러가 읽지 못한다.
+googleid = "1.1.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -34,6 +37,9 @@ androidx-media3-ui-compose = { group = "androidx.media3", name = "media3-ui-comp
 androidx-navigation3-runtime = { group = "androidx.navigation3", name = "navigation3-runtime", version.ref = "navigation3" }
 androidx-navigation3-ui = { group = "androidx.navigation3", name = "navigation3-ui", version.ref = "navigation3" }
 kotlinx-serialization-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
+credentials-core = { group = "androidx.credentials", name = "credentials", version.ref = "credentials" }
+credentials-play = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "credentials" }
+googleid = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleid" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

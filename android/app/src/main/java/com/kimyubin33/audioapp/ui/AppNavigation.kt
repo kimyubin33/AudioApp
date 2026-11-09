@@ -21,7 +21,13 @@ import androidx.navigation3.runtime.NavEntry
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import com.kimyubin33.audioapp.data.GoogleSignIn
 import com.kimyubin33.audioapp.data.LibraryEntry
+import com.kimyubin33.audioapp.data.SignInResult
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import uniffi.audio_core.NetException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
@@ -111,6 +117,36 @@ fun AppNavigation(
         }
     }
 
+    // 로그인이 필요한 동작에서 로그인이 안 돼 있으면 로그인 안내 창을 띄운다
+    var loginPrompt by remember { mutableStateOf(false) }
+    var signingIn by remember { mutableStateOf(false) }
+
+    fun failed(e: Exception) {
+        if (e is NetException.Unauthorized) loginPrompt = true else toast(userMessage(e))
+    }
+
+    fun signIn() {
+        if (signingIn) return
+        signingIn = true
+        scope.launch {
+            try {
+                when (GoogleSignIn.signIn(context)) {
+                    SignInResult.Success -> {
+                        loginPrompt = false
+                        toast("로그인했습니다.")
+                        viewModel.markAllStale()
+                        viewModel.refreshSubscriptions()
+                    }
+                    SignInResult.Cancelled -> Unit
+                    SignInResult.NotConfigured -> toast("로그인 설정이 아직 되어 있지 않습니다.")
+                    SignInResult.Failed -> toast("로그인하지 못했습니다. 다시 시도해 주세요.")
+                }
+            } finally {
+                signingIn = false
+            }
+        }
+    }
+
     fun toggleSubscribe(creator: String) {
         scope.launch {
             try {
@@ -118,7 +154,7 @@ fun AppNavigation(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                toast(userMessage(e))
+                failed(e)
             }
         }
     }
@@ -218,7 +254,11 @@ fun AppNavigation(
                                         hasMore = subs.nextCursor != null,
                                         notice = notice,
                                         onOpen = ::openContent,
-                                        onRetry = { viewModel.retry(FeedKind.Subscribed) },
+                                        onRetry = {
+                                            // 로그인이 안 돼서 비어 있는 경우에는 다시 시도 대신 로그인 창을 띄운다
+                                            if (subs.error == userMessage(NetException.Unauthorized())) loginPrompt = true
+                                            else viewModel.retry(FeedKind.Subscribed)
+                                        },
                                         onLoadMore = { viewModel.loadMore(FeedKind.Subscribed) },
                                     )
 
@@ -348,6 +388,16 @@ fun AppNavigation(
             },
         )
 
+        if (loginPrompt) {
+            AlertDialog(
+                onDismissRequest = { loginPrompt = false },
+                title = { Text("로그인이 필요합니다") },
+                text = { Text("구독, 신고, 차단은 Google 계정으로 로그인한 뒤 쓸 수 있습니다. 보는 것과 듣는 것은 로그인 없이 됩니다.") },
+                confirmButton = { TextButton(onClick = ::signIn, enabled = !signingIn) { Text("Google로 로그인") } },
+                dismissButton = { TextButton(onClick = { loginPrompt = false }) { Text("나중에") } },
+            )
+        }
+
         val current = target
         if (current != null) {
             when (dialog) {
@@ -364,7 +414,8 @@ fun AppNavigation(
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
-                                toast(userMessage(e)) // 창은 열어 둬서 다시 시도할 수 있게 한다
+                                if (e is NetException.Unauthorized) dialog = null
+                                failed(e) // 그 밖의 오류는 창을 열어 둬서 다시 시도할 수 있게 한다
                             } finally {
                                 submitting = false
                             }
@@ -391,7 +442,8 @@ fun AppNavigation(
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {
-                                toast(userMessage(e))
+                                if (e is NetException.Unauthorized) dialog = null
+                                failed(e)
                             } finally {
                                 submitting = false
                             }
