@@ -21,6 +21,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import com.kimyubin33.audioapp.ui.StartupScreen
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
@@ -41,6 +46,10 @@ class MainActivity : ComponentActivity() {
     // 플레이어는 PlaybackService가 들고 있고, 화면은 이 컨트롤러로 조종한다
     private var controllerFuture: ListenableFuture<MediaController>? = null
     private var controller by mutableStateOf<MediaController?>(null)
+    private var voiceHandled = false
+    private var connectionFailed by mutableStateOf(false)
+    private var connectionTimeout: Job? = null
+    private var connectionGeneration = 0
 
     // 알림 권한을 거부해도 재생은 된다 (알림만 안 보임)
     // Fragment는 실제로 1.5.7로 해석된다. 구 Activity lint가 transitive 요청 버전을 잘못 보고한다.
@@ -57,6 +66,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        voiceHandled = savedInstanceState?.getBoolean("voice_handled") ?: false
         enableEdgeToEdge()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
         connectToPlaybackService()
@@ -64,8 +74,10 @@ class MainActivity : ComponentActivity() {
         setContent {
             AudioAppTheme {
                 Scaffold(modifier = Modifier.fillMaxSize(), contentWindowInsets = WindowInsets.safeDrawing) { innerPadding ->
-                    // 서비스에 연결되기 전에는 아무것도 그리지 않는다 (보통 순식간)
-                    controller?.let { player ->
+                    val player = controller
+                    if (player == null) StartupScreen(connectionFailed, ::connectToPlaybackService,
+                        Modifier.padding(innerPadding).consumeWindowInsets(innerPadding))
+                    else {
                         AppNavigation(
                             player = player,
                             viewModel = homeViewModel,
@@ -85,8 +97,39 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(newIntent: android.content.Intent) {
+        super.onNewIntent(newIntent)
+        setIntent(newIntent)
+        voiceHandled = false
+        handleVoiceRequest()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("voice_handled",voiceHandled)
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun handleVoiceRequest() {
+        val player = controller ?: return
+        if(voiceHandled || intent.action != android.provider.MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH) return
+        voiceHandled = true
+        // Only a bounded string is consumed; never forward a nested Intent, URI or grant flags.
+        val query = try { intent.getStringExtra(android.app.SearchManager.QUERY).orEmpty().trim() }
+            catch (_: RuntimeException) { return }
+        if(query.length > 100 || query.any { it.isISOControl() }) return
+        val item = if(query.isEmpty()) androidx.media3.common.MediaItem.Builder()
+            .setMediaId(com.kimyubin33.audioapp.data.RadioCatalog.MIX).build()
+        else androidx.media3.common.MediaItem.Builder().setRequestMetadata(
+            androidx.media3.common.MediaItem.RequestMetadata.Builder().setSearchQuery(query).build()).build()
+        player.setMediaItem(item)
+        player.prepare()
+        player.play()
+    }
+
     override fun onDestroy() {
         // 컨트롤러만 놓는다. 재생 중이면 서비스는 계속 살아 있다.
+        connectionGeneration++
+        connectionTimeout?.cancel()
         controllerFuture?.let { MediaController.releaseFuture(it) }
         controllerFuture = null
         controller = null
@@ -107,13 +150,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun connectToPlaybackService() {
-        val token = SessionToken(this, ComponentName(this, PlaybackService::class.java))
-        val future = MediaController.Builder(this, token).buildAsync()
+        val generation = ++connectionGeneration
+        connectionTimeout?.cancel()
+        controllerFuture?.let { MediaController.releaseFuture(it) }
+        controllerFuture = null
+        controller = null
+        connectionFailed = false
+        fun fail() {
+            if (generation != connectionGeneration || isDestroyed) return
+            connectionGeneration++
+            connectionTimeout?.cancel()
+            controllerFuture?.let { MediaController.releaseFuture(it) }
+            controllerFuture = null
+            controller = null
+            connectionFailed = true
+        }
+        val future = try {
+            MediaController.Builder(this, SessionToken(this, ComponentName(this, PlaybackService::class.java)))
+                .setListener(object : MediaController.Listener {
+                    override fun onDisconnected(controller: MediaController) { fail() }
+                }).buildAsync()
+        } catch (_: Exception) { fail(); return }
         controllerFuture = future
-        future.addListener(
-            { controller = runCatching { future.get() }.getOrNull() },
-            ContextCompat.getMainExecutor(this),
-        )
+        connectionTimeout = lifecycleScope.launch { delay(12_000); fail() }
+        future.addListener({
+            if (generation == connectionGeneration && !isDestroyed) {
+                val connected = runCatching { future.get() }.getOrNull()
+                if (connected == null) fail()
+                else {
+                    connectionTimeout?.cancel()
+                    controller = connected
+                    handleVoiceRequest()
+                }
+            }
+        }, ContextCompat.getMainExecutor(this))
     }
 
     private fun requestNotificationPermissionIfNeeded() {

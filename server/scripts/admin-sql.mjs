@@ -66,7 +66,7 @@ export function buildCommand(command, args) {
         write: true,
         expectChanges: 1, returning: true,
         sql: `UPDATE contents SET status = 'approved', reject_reason = NULL, review_actor = 'cli', reviewed_at = unixepoch()
-               WHERE id = '${cid}' AND status = 'pending' AND revision = ${revision} AND (object_key IS NOT NULL OR external_url IS NOT NULL) RETURNING id;`,
+               WHERE id = '${cid}' AND status = 'pending' AND revision = ${revision} AND (kind = 'post' OR object_key IS NOT NULL OR external_url IS NOT NULL) RETURNING id;`,
       };
     }
 

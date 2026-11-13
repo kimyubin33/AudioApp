@@ -119,6 +119,19 @@ class AccountViewModel @JvmOverloads constructor(
         }
     }
 
+    /** Only called after the server acknowledges deletion; account confirmation happens remotely. */
+    suspend fun finishDeletion(expectedUserId: String) {
+        check(_state.value.userId == expectedUserId)
+        try {
+            files.withLock { withContext(Dispatchers.IO) {
+                (store ?: LocalProfileStore(getApplication())).deleteAccount(expectedUserId)
+            } }
+        } finally {
+            source.signOut()
+            refresh()
+        }
+    }
+
     fun refresh() { refreshes.update { it+1 } }
 
     fun signOut() = authAction { source.signOut() }

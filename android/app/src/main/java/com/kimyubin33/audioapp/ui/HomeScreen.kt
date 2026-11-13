@@ -57,11 +57,15 @@ data class HomeItem(
     val creator: String,
     val aiGenerated: Boolean,
     val isVideo: Boolean = false,
+    val isPost: Boolean = false,
+    val shortStyle: String? = null,
+    val excerpt: String? = null,
+    val hasImage: Boolean = false,
 )
 
 /** "creator · 영상 · AI 생성" 처럼 보조 정보를 한 줄로. */
-internal fun metaLine(creator: String, isVideo: Boolean, aiGenerated: Boolean): String =
-    listOfNotNull(creator, if (isVideo) "쇼츠" else null, if (aiGenerated) "AI 생성" else null).joinToString(" · ")
+internal fun metaLine(creator: String, isVideo: Boolean, aiGenerated: Boolean, isPost: Boolean = false, shortStyle: String? = null): String =
+    listOfNotNull(creator, if(isPost) "게시글" else if (isVideo) shortStyle ?: "쇼츠" else null, if (aiGenerated) "AI 생성" else null).joinToString(" · ")
 
 /** 한 피드에서 오디오와 쇼츠를 발견한다. 검색은 사용자가 열 때만 펼친다. */
 @Composable
@@ -83,11 +87,13 @@ fun FeedScreen(
     format: FeedFormat = FeedFormat.All,
     onFormat: (FeedFormat) -> Unit = {},
     onOpenShorts: (() -> Unit)? = null,
+    shortFilter: ShortFilter = ShortFilter.All,
+    onShortFilter: (ShortFilter) -> Unit = {},
 ) {
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
     LaunchedEffect(searchQuery) { if (!searchQuery.isNullOrEmpty()) searchOpen = true }
-    LaunchedEffect(format) { listState.scrollToItem(0) }
+    LaunchedEffect(format,shortFilter) { listState.scrollToItem(0) }
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         LazyColumn(Modifier.widthIn(max=760.dp).fillMaxSize(), state=listState, contentPadding=PaddingValues(bottom=24.dp)) {
             item(key="header") {
@@ -108,7 +114,6 @@ fun FeedScreen(
                                 colors=FilterChipDefaults.filterChipColors(selectedContainerColor=Ink,selectedLabelColor=Paper))
                         }
                     }
-                    if(format==FeedFormat.Shorts && onOpenShorts!=null) TextButton(onClick=onOpenShorts,modifier=Modifier.padding(horizontal=16.dp)){Text("연속 재생")}
                     Spacer(Modifier.height(12.dp))
                 } else Spacer(Modifier.height(12.dp))
             }
@@ -120,7 +125,9 @@ fun FeedScreen(
                     else -> StatusMessage(emptyMessage)
                 }
             } else {
-                items(items,key={it.id}) { FeedCard(it,onOpen) }
+                items(items.filterNot { it.isVideo || it.isPost },key={it.id}) { item ->
+                    Box(Modifier.animateItem()) { FeedCard(item,onOpen) }
+                }
                 item {
                     when {
                         loading -> StatusMessage("불러오는 중…")
@@ -136,9 +143,17 @@ fun FeedScreen(
 @Composable
 internal fun FeedCard(item: HomeItem, onOpen: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().padding(horizontal=24.dp).padding(bottom=28.dp)
-        .clickable(role=Role.Button,onClickLabel="이야기 재생"){onOpen(item.id)}) {
+        .clickable(role=Role.Button,onClickLabel=if(item.isPost) "게시글 열기" else "이야기 재생"){onOpen(item.id)}) {
         Box(Modifier.clip(RoundedCornerShape(14.dp))) {
-            InkArt(seed=item.id,isVideo=item.isVideo,modifier=Modifier.fillMaxWidth().aspectRatio(16f/9f))
+            if(item.isPost && item.hasImage) RemotePostImage(item.id,item.title,Modifier.fillMaxWidth().aspectRatio(4f/3f))
+            else if(item.isPost) {
+                Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(24.dp),verticalArrangement=Arrangement.spacedBy(14.dp)) {
+                    Text("Post",style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(item.excerpt.orEmpty(),style=MaterialTheme.typography.bodyLarge,maxLines=5,overflow=TextOverflow.Ellipsis)
+                }
+            } else InkArt(seed=item.id,isVideo=item.isVideo,modifier=Modifier.fillMaxWidth().aspectRatio(16f/9f))
+            if(item.isVideo && item.shortStyle!=null) Text(item.shortStyle,style=MaterialTheme.typography.labelSmall,
+                color=Paper,modifier=Modifier.align(Alignment.TopStart).padding(12.dp).clip(RoundedCornerShape(8.dp)).background(Ink).padding(horizontal=10.dp,vertical=4.dp))
             if(item.isVideo) PlayBadge(Modifier.align(Alignment.BottomEnd).padding(12.dp))
         }
         Row(Modifier.padding(start=8.dp,end=8.dp,top=12.dp),verticalAlignment=Alignment.CenterVertically) {
@@ -147,7 +162,7 @@ internal fun FeedCard(item: HomeItem, onOpen: (String) -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text(item.title,style=MaterialTheme.typography.titleMedium.copy(fontFamily=FontFamily.Default,fontWeight=FontWeight.SemiBold),
                     maxLines=2,overflow=TextOverflow.Ellipsis)
-                Text(metaLine(item.creator,item.isVideo,item.aiGenerated),style=MaterialTheme.typography.bodySmall,
+                Text(metaLine(item.creator,item.isVideo,item.aiGenerated,item.isPost,item.shortStyle),style=MaterialTheme.typography.bodySmall,
                     color=MaterialTheme.colorScheme.onSurfaceVariant,maxLines=1,overflow=TextOverflow.Ellipsis)
             }
         }
@@ -211,7 +226,7 @@ private fun StatusMessage(
 
 private val previewItems = listOf(
     HomeItem("sample-1", "샘플 오디오 하나", "creator_01", true),
-    HomeItem("sample-4", "짧은 영상 샘플", "creator_01", true, isVideo = true),
+    HomeItem("sample-4", "돌아가는 길", "creator_01", true),
     HomeItem("sample-2", "파리의 재즈", "creator_02", true),
 )
 

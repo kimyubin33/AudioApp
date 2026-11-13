@@ -14,7 +14,11 @@ const VIDEO_MAX_SECONDS: u32 = 180; // 3분
 pub enum ContentKind {
     Audio,
     ShortVideo,
+    Post,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ShortStyle { Story, Moment }
 
 /// 검증을 통과한 콘텐츠. 서버 id는 서버가 정하므로 아직 없다.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -76,8 +80,9 @@ pub fn create_content(
     let max = match kind {
         ContentKind::Audio => AUDIO_MAX_SECONDS,
         ContentKind::ShortVideo => VIDEO_MAX_SECONDS,
+        ContentKind::Post => 0,
     };
-    if duration_seconds == 0 || duration_seconds > max {
+    if (kind != ContentKind::Post && duration_seconds == 0) || duration_seconds > max {
         return Err(ContentError::InvalidDuration);
     }
 

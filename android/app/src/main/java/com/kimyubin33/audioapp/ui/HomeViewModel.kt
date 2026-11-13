@@ -23,13 +23,20 @@ import kotlinx.coroutines.withContext
 import uniffi.audio_core.ContentDetail
 import uniffi.audio_core.ContentKind
 import uniffi.audio_core.ContentPage
+import uniffi.audio_core.ContentItem
+import uniffi.audio_core.ShortStyle
 import uniffi.audio_core.NetException
 import uniffi.audio_core.ReportReason
 
 /** 목록(피드) 종류. 하단 탭 중 오디오·숏츠·구독이 각각 하나씩 가진다. */
 enum class FeedKind { Audio, Shorts, Subscribed }
 
-enum class FeedFormat(val label: String) { All("전체"), Audio("오디오"), Shorts("쇼츠") }
+enum class FeedFormat(val label: String) { All("전체"), Subscribed("구독") }
+enum class ShortFilter(val label: String, val wire: ShortStyle?) { All("All",null), Story("Story",ShortStyle.STORY), Moment("Moment",ShortStyle.MOMENT) }
+
+fun ContentItem.toHomeItem() = HomeItem(id,content.title,content.creatorId,content.aiGenerated,
+    isVideo=content.kind==ContentKind.SHORT_VIDEO,isPost=content.kind==ContentKind.POST,
+    shortStyle=when(shortStyle){ShortStyle.STORY->"Story";ShortStyle.MOMENT->"Moment";null->null},excerpt=postExcerpt,hasImage=hasImage)
 
 /** 목록 하나가 그리는 상태. */
 data class HomeUiState(
@@ -63,10 +70,12 @@ fun ContentDetail.toLibraryEntry() = LibraryEntry(
     aiGenerated = item.content.aiGenerated,
     isVideo = item.content.kind == ContentKind.SHORT_VIDEO,
     atMillis = System.currentTimeMillis(),
+    isPost = item.content.kind == ContentKind.POST,
+    shortStyle = item.toHomeItem().shortStyle,
 )
 
 fun HomeItem.toLibraryEntry() = LibraryEntry(
-    id = id, title = title, creator = creator, aiGenerated = aiGenerated, isVideo = isVideo, atMillis = System.currentTimeMillis(),
+    id = id, title = title, creator = creator, aiGenerated = aiGenerated, isVideo = isVideo, atMillis = System.currentTimeMillis(), isPost=isPost, shortStyle=shortStyle,
 )
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
@@ -116,18 +125,28 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         if (now) AccountActions.subscribe(getApplication(), creatorId) else AccountActions.unsubscribe(getApplication(), creatorId)
         if(epoch!=accountEpoch) return now
         _subscribed.update { if (now) it + creatorId else it - creatorId }
+        if (_format.value == FeedFormat.Subscribed) feeds.getValue(FeedKind.Audio).update { it.copy(stale = true) }
         feeds.getValue(FeedKind.Subscribed).update { it.copy(stale = true) } // 구독 목록이 바뀌었으니 다시 불러온다
         return now
+    }
+
+    private val _shortFilter = MutableStateFlow(ShortFilter.All)
+    val shortFilter = _shortFilter.asStateFlow()
+    fun selectShortFilter(value: ShortFilter) {
+        if(value==_shortFilter.value) return
+        _shortFilter.value=value
+        requestVersions[FeedKind.Shorts]=(requestVersions[FeedKind.Shorts]?:0)+1
+        loadJobs[FeedKind.Shorts]?.cancel()
+        feeds.getValue(FeedKind.Shorts).value=HomeUiState(stale=true)
     }
 
     private val _format = MutableStateFlow(FeedFormat.All)
     val format: StateFlow<FeedFormat> = _format.asStateFlow()
     fun selectFormat(value: FeedFormat) {
-        if (value == _format.value && _query.value.isEmpty()) return
+        if (value == _format.value) return
         _format.value = value
-        _query.value = ""
         searchJob?.cancel()
-        audioLoadJob?.cancel()
+        loadJobs[FeedKind.Audio]?.cancel()
         feeds.getValue(FeedKind.Audio).value = HomeUiState()
         load(FeedKind.Audio, reset = true)
     }
@@ -135,14 +154,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
     private var searchJob: Job? = null
-    private var audioLoadJob: Job? = null
+    private val loadJobs = mutableMapOf<FeedKind,Job>()
+    private val requestVersions = mutableMapOf<FeedKind,Long>()
     private var accountEpoch=0L
 
     init {
         viewModelScope.launch {
             SessionSignals.changes.drop(1).collect {
                 accountEpoch++
-                audioLoadJob?.cancel()
+                loadJobs.values.forEach { it.cancel() }
                 _subscribed.value=emptySet()
                 // 이전 계정에서 시작한 응답은 새 계정의 구독/차단 필터 결과를 덮어쓰지 못한다.
                 feeds.values.forEach { it.value=HomeUiState(stale=true) }
@@ -153,9 +173,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun search(query: String) {
         if (query.codePointCount(0, query.length) > 100 || query == _query.value) return
         _query.value = query
-        _format.value = FeedFormat.All
+        requestVersions[FeedKind.Audio]=(requestVersions[FeedKind.Audio]?:0)+1
         searchJob?.cancel()
-        audioLoadJob?.cancel()
+        loadJobs[FeedKind.Audio]?.cancel()
         feeds.getValue(FeedKind.Audio).value = HomeUiState(loading = true, loaded = true)
         searchJob = viewModelScope.launch {
             delay(350)
@@ -208,18 +228,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         return api.contentDetail(id)
     }
 
-    private suspend fun fetch(kind: FeedKind, cursor: String?): ContentPage {
+    private suspend fun fetch(kind: FeedKind, cursor: String?, format: FeedFormat, style: ShortFilter, query: String): ContentPage {
         val context = getApplication<Application>()
         return when (kind) {
-            FeedKind.Audio -> if (_query.value.isBlank()) api().listContents(PAGE_SIZE, cursor, when (_format.value) {
-                FeedFormat.All -> null
-                FeedFormat.Audio -> ContentKind.AUDIO
-                FeedFormat.Shorts -> ContentKind.SHORT_VIDEO
-            }, false)
-                else api().searchContents(_query.value.trim(), PAGE_SIZE, cursor)
-            FeedKind.Shorts -> api().listContents(PAGE_SIZE, cursor, ContentKind.SHORT_VIDEO, false)
+            FeedKind.Audio -> if (format == FeedFormat.Subscribed) {
+                AccountActions.withLogin(context) { it.browseContents(PAGE_SIZE,cursor,ContentKind.AUDIO,null,query.trim().ifBlank { null },true) }
+            } else api().browseContents(PAGE_SIZE,cursor,ContentKind.AUDIO,null,query.trim().ifBlank { null },false)
+            FeedKind.Shorts -> api().browseContents(PAGE_SIZE,cursor,ContentKind.SHORT_VIDEO,style.wire,null,false)
             // 구독 탭은 로그인이 필요하다 (debug에서는 개발 로그인을 자동으로 한다)
-            FeedKind.Subscribed -> AccountActions.withLogin(context) { it.listContents(PAGE_SIZE, cursor, null, true) }
+            FeedKind.Subscribed -> AccountActions.withLogin(context) { it.listContents(PAGE_SIZE, cursor, ContentKind.AUDIO, true) }
         }
     }
 
@@ -228,23 +245,18 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun load(kind: FeedKind, reset: Boolean) {
         val epoch=accountEpoch
+        val version=(requestVersions[kind]?:0L)+1
+        requestVersions[kind]=version
+        val format=_format.value; val style=_shortFilter.value; val query=_query.value
         val flow = feeds.getValue(kind)
         val cursor = if (reset) null else flow.value.nextCursor
         flow.update { it.copy(loading = true, error = null) }
-        if (kind == FeedKind.Audio) audioLoadJob?.cancel()
+        loadJobs[kind]?.cancel()
         val job = viewModelScope.launch {
             try {
-                val page = fetch(kind, cursor)
-                if(epoch!=accountEpoch) return@launch
-                val received = page.items.map {
-                    HomeItem(
-                        id = it.id,
-                        title = it.content.title,
-                        creator = it.content.creatorId,
-                        aiGenerated = it.content.aiGenerated,
-                        isVideo = it.content.kind == ContentKind.SHORT_VIDEO,
-                    )
-                }
+                val page = fetch(kind, cursor,format,style,query)
+                if(epoch!=accountEpoch || requestVersions[kind]!=version) return@launch
+                val received = page.items.map { it.toHomeItem() }
                 flow.update {
                     it.copy(
                         items = if (reset) received else (it.items + received).distinctBy { item -> item.id },
@@ -257,12 +269,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                if(epoch!=accountEpoch) return@launch
+                if(epoch!=accountEpoch || requestVersions[kind]!=version) return@launch
                 // 구독 탭: 로그인이 안 된 것은 오류가 아니라 안내 문구로 보여 준다 (userMessage가 "로그인이 필요합니다.")
                 flow.update { it.copy(loading = false, error = userMessage(e), stale = false) }
             }
         }
-        if (kind == FeedKind.Audio) audioLoadJob = job
+        loadJobs[kind] = job
     }
 
     private companion object {

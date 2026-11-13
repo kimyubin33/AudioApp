@@ -6,7 +6,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::content::{Content, ContentKind, create_content};
+use crate::content::{Content, ContentKind, ShortStyle, create_content};
 use crate::net::validate_stream_url;
 use crate::validation::{is_valid_cursor, is_valid_id};
 
@@ -26,6 +26,9 @@ const SESSION_MAX_SECONDS: u32 = 7 * 24 * 60 * 60; // 7일
 pub struct ContentItem {
     pub id: String,
     pub content: Content,
+    pub short_style: Option<ShortStyle>,
+    pub post_excerpt: Option<String>,
+    pub has_image: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -39,7 +42,10 @@ pub struct ContentPage {
 pub struct ContentDetail {
     pub item: ContentItem,
     /// 재생 주소 (https만 통과한다)
-    pub stream_url: String,
+    pub stream_url: Option<String>,
+    pub body: Option<String>,
+    pub place_name: Option<String>,
+    pub audio_content_id: Option<String>,
 }
 
 /// 로그인 결과. 토큰 값이 로그에 찍히지 않도록 Debug를 직접 구현한다.
@@ -93,6 +99,9 @@ pub(crate) struct WireItem {
     ai_generated: bool,
     #[serde(default)]
     ai_tool: Option<String>,
+    #[serde(default)] short_style: Option<String>,
+    #[serde(default)] post_excerpt: Option<String>,
+    #[serde(default)] has_image: bool,
 }
 
 #[derive(Deserialize)]
@@ -106,7 +115,10 @@ struct WirePage {
 struct WireDetail {
     #[serde(flatten)]
     item: WireItem,
-    stream_url: String,
+    #[serde(default)] stream_url: Option<String>,
+    #[serde(default)] body: Option<String>,
+    #[serde(default)] place_name: Option<String>,
+    #[serde(default)] audio_content_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -134,6 +146,7 @@ pub(crate) fn to_item(w: WireItem) -> Result<ContentItem, ApiError> {
     let kind = match w.kind.as_str() {
         "audio" => ContentKind::Audio,
         "short_video" => ContentKind::ShortVideo,
+        "post" => ContentKind::Post,
         _ => return Err(ApiError::InvalidResponse),
     };
     // 제목·길이·AI 표시 규칙은 앱에서 만드는 콘텐츠와 똑같이 적용한다
@@ -146,7 +159,17 @@ pub(crate) fn to_item(w: WireItem) -> Result<ContentItem, ApiError> {
         w.ai_tool,
     )
     .map_err(|_| ApiError::InvalidResponse)?;
-    Ok(ContentItem { id: w.id, content })
+    let short_style = match w.short_style.as_deref() {
+        None => None,
+        Some("story") if kind == ContentKind::ShortVideo => Some(ShortStyle::Story),
+        Some("moment") if kind == ContentKind::ShortVideo => Some(ShortStyle::Moment),
+        _ => return Err(ApiError::InvalidResponse),
+    };
+    if w.has_image && kind != ContentKind::Post || w.post_excerpt.as_ref().is_some_and(|s|
+        kind != ContentKind::Post || (!s.is_empty() && !crate::validation::is_clean_multiline(s,180))) {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(ContentItem { id: w.id, content, short_style, post_excerpt: w.post_excerpt, has_image: w.has_image })
 }
 
 // ───────────────────────── Kotlin에서 부르는 함수 ─────────────────────────
@@ -178,8 +201,15 @@ pub fn parse_content_page(body: String) -> Result<ContentPage, ApiError> {
 pub fn parse_content_detail(body: String) -> Result<ContentDetail, ApiError> {
     let wire: WireDetail = parse_json(&body)?;
     let item = to_item(wire.item)?;
-    let stream_url = validate_stream_url(&wire.stream_url).map_err(|_| ApiError::InvalidResponse)?;
-    Ok(ContentDetail { item, stream_url })
+    let stream_url = wire.stream_url.map(|s| validate_stream_url(&s).map_err(|_| ApiError::InvalidResponse)).transpose()?;
+    if item.content.kind == ContentKind::Post {
+        if stream_url.is_some() || !wire.body.as_ref().is_some_and(|s| crate::validation::is_clean_multiline(s,2000)) ||
+            wire.place_name.as_ref().is_some_and(|s| !crate::validation::is_clean_text(s,100)) ||
+            wire.audio_content_id.as_ref().is_some_and(|s| !is_valid_id(s)) { return Err(ApiError::InvalidResponse); }
+    } else if stream_url.is_none() || wire.body.is_some() || wire.audio_content_id.is_some() || wire.place_name.is_some() {
+        return Err(ApiError::InvalidResponse);
+    }
+    Ok(ContentDetail { item, stream_url, body: wire.body, place_name: wire.place_name, audio_content_id: wire.audio_content_id })
 }
 
 /// `POST /v1/auth/google` 응답을 해석한다.
@@ -225,6 +255,7 @@ pub fn list_contents_path(
         let kind = match kind {
             ContentKind::Audio => "audio",
             ContentKind::ShortVideo => "short_video",
+            ContentKind::Post => "post",
         };
         path.push_str(&format!("&kind={kind}"));
     }
@@ -352,7 +383,7 @@ mod tests {
     fn detail_requires_https_stream_url() {
         let ok = ITEM.replace("}", r#","stream_url":"https://cdn.example.com/a.mp3?sig=abc"}"#);
         let d = parse_content_detail(ok).unwrap();
-        assert_eq!(d.stream_url, "https://cdn.example.com/a.mp3?sig=abc");
+        assert_eq!(d.stream_url.as_deref(), Some("https://cdn.example.com/a.mp3?sig=abc"));
         assert_eq!(d.item.id, "c_1");
 
         for bad in ["http://cdn.example.com/a.mp3", "file:///sdcard/a.mp3", "javascript:alert(1)", "https://u:p@x.com/a.mp3"] {

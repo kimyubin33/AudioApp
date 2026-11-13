@@ -1,5 +1,7 @@
 import { issueToken, TOKEN_TTL_SECONDS } from './auth';
 import { googleUser } from './accounts';
+import { policyConfig } from './legal';
+import { extendedFormats } from './features';
 import { BASE_HEADERS, json, requireUser, requireWebOrigin, webCookieName } from './http';
 import type { AppEnv, UserRow } from './types';
 
@@ -24,12 +26,12 @@ export async function webSession(request: Request, env: AppEnv): Promise<Respons
 }
 export function webConfig(request: Request, env: AppEnv): Response {
   const local = ['localhost','127.0.0.1','[::1]'].includes(new URL(request.url).hostname);
-  return json(200, { google_client_id: env.GOOGLE_CLIENT_ID || '', dev_login: local && env.DEV_MODE === '1' });
+  return json(200, { google_client_id: env.GOOGLE_CLIENT_ID || '', dev_login: local && env.DEV_MODE === '1', extended_formats: extendedFormats(env), policy: policyConfig(env) });
 }
 export async function webAsset(request: Request, env: AppEnv): Promise<Response | null> {
   if (!env.ASSETS || !['GET','HEAD'].includes(request.method)) return null;
   const path = new URL(request.url).pathname;
-  if (!['/','/creator','/admin'].includes(path) && !path.startsWith('/assets/')) return null;
+  if (!['/','/creator','/admin','/delete-account'].includes(path) && !path.startsWith('/assets/')) return null;
   const url = new URL(request.url);
   if (!path.startsWith('/assets/')) url.pathname = '/index.html';
   const response = await env.ASSETS.fetch(new Request(url, request));

@@ -34,7 +34,7 @@ private fun Context.activity(): Activity? = when (this) {
 
 @Composable
 fun NearbyScreen(viewModel: NearbyViewModel, onBack: () -> Unit, onOpen: (String) -> Unit, notice: String?,
-    embedded: Boolean = false, onSearchPlace: ((String) -> Unit)? = null) {
+    embedded: Boolean = false, onSearchPlace: ((String) -> Unit)? = null, player: androidx.media3.common.Player? = null) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -47,7 +47,7 @@ fun NearbyScreen(viewModel: NearbyViewModel, onBack: () -> Unit, onOpen: (String
         denied = !viewModel.hasPermission()
         if (!denied) viewModel.enable()
     }
-    fun enable() {
+    fun enableAfterNotice() {
         when {
             viewModel.hasPermission() -> { denied = false; viewModel.enable() }
             context.activity()?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, permission) } == true -> rationale = true
@@ -55,6 +55,7 @@ fun NearbyScreen(viewModel: NearbyViewModel, onBack: () -> Unit, onOpen: (String
             else -> launcher.launch(permissions)
         }
     }
+    fun enable() { rationale = true }
     DisposableEffect(lifecycle, viewModel) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_START) viewModel.enterForeground()
@@ -67,7 +68,10 @@ fun NearbyScreen(viewModel: NearbyViewModel, onBack: () -> Unit, onOpen: (String
             viewModel.leaveForeground()
         }
     }
-    NearbyContent(state, onBack, ::enable, viewModel::disable, viewModel::refresh, viewModel::radius, onOpen,
+    if (embedded) DriveScreen(state,player,::enable,viewModel::disable,viewModel::refresh,
+        onSettings={context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:${context.packageName}")))},
+        onLocationSettings={context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))},denied=denied)
+    else NearbyContent(state, onBack, ::enable, viewModel::disable, viewModel::refresh, viewModel::radius, onOpen,
         onPermissionSettings = { context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))) },
         onLocationSettings = { context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) },
         denied = denied, notice = notice, embedded = embedded, onSearchPlace = onSearchPlace,
@@ -79,8 +83,8 @@ fun NearbyScreen(viewModel: NearbyViewModel, onBack: () -> Unit, onOpen: (String
     if (rationale) AlertDialog(
         onDismissRequest = { rationale = false },
         title = { Text("주변 이야기 위치 권한") },
-        text = { Text("주변 작품 탐색에 위치를 사용하고, 정확한 위치를 허용하면 좁은 장소의 체류를 더 잘 확인할 수 있습니다. 대략적인 위치만 허용해도 탐색할 수 있고, 권한을 거부해도 업로드·검색·재생은 계속 사용할 수 있습니다.") },
-        confirmButton = { TextButton(onClick = { rationale = false; launcher.launch(permissions) }) { Text("계속") } },
+        text = { Text("주변 오디오 검색을 위해 화면을 사용하는 동안 위치 좌표를 서버로 보냅니다. 현재 검색 처리에는 좌표를 데이터베이스에 저장하지 않습니다. 대략적인 위치만 허용할 수 있으며, 주변 탐색을 끄거나 이 화면을 벗어나면 위치 요청을 중지합니다. 거부해도 업로드·검색·재생은 사용할 수 있습니다.") },
+        confirmButton = { TextButton(onClick = { rationale = false; if(viewModel.hasPermission()) enableAfterNotice() else launcher.launch(permissions) }) { Text("동의하고 계속") } },
         dismissButton = { TextButton(onClick = { rationale = false }) { Text("취소") } },
     )
 }
@@ -111,7 +115,7 @@ internal fun NearbyContent(
                     OutlinedButton(onClick={onSearchPlace(placeQuery.trim())},enabled=placeQuery.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text("검색")}
                 }
                 if (!state.enabled) {
-                    Text("주변 검색에만 위치를 사용하며 저장하지 않습니다.",
+                    Text("위치를 서버로 보내 주변 오디오를 찾습니다. 위치 사용은 선택입니다.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Button(onClick = onEnable, modifier=Modifier.fillMaxWidth()) { Text("내 주변") }
                 } else {

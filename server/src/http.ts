@@ -1,4 +1,5 @@
 import { verifyToken } from './auth';
+import { requireCreatorPolicy } from './legal';
 import type { AppEnv, UserRow } from './types';
 
 export const BASE_HEADERS = { 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store' };
@@ -51,12 +52,12 @@ export async function authenticate(request: Request, env: AppEnv): Promise<UserR
   const userId = await verifyToken(env, match[1]);
   if (!userId) throw new HttpError(401, 'unauthorized');
   const user = await env.DB.prepare('SELECT * FROM users WHERE id = ?1').bind(userId).first<UserRow>();
-  if (!user) throw new HttpError(401, 'unauthorized');
+  if (!user || user.deletion_requested_at != null) throw new HttpError(401, 'unauthorized');
   return user;
 }
 export async function requireUser(request: Request, env: AppEnv): Promise<UserRow> {
   const user = await authenticate(request, env);
-  if (!user) throw new HttpError(401, 'unauthorized');
+  if (!user || user.deletion_requested_at != null) throw new HttpError(401, 'unauthorized');
   return user;
 }
 export async function requireAdmin(request: Request, env: AppEnv): Promise<UserRow> {
@@ -67,6 +68,7 @@ export async function requireAdmin(request: Request, env: AppEnv): Promise<UserR
 export async function requireCreator(request: Request, env: AppEnv): Promise<UserRow & { creator_id: string }> {
   const user = await requireUser(request, env);
   if (!user.creator_id || !['creator', 'admin'].includes(user.role)) throw new HttpError(403, 'forbidden');
+  await requireCreatorPolicy(user.id, env);
   return user as UserRow & { creator_id: string };
 }
 

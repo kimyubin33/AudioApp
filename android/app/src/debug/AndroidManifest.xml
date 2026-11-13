@@ -6,4 +6,14 @@
          실제 서버는 공개 주소라서 release 앱에는 이 권한을 넣지 않는다. -->
     <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
+    <application>
+        <!-- Design simulator only: never included in release or permitted as a driving activity. -->
+        <activity android:name=".vehicle.InkSimulatorActivity"
+            android:exported="true" android:label="Ink Studio">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
 </manifest>

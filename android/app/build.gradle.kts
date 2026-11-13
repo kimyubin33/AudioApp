@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -10,6 +12,9 @@ val googleWebClientId = providers.gradleProperty("googleWebClientId").orElse("")
 
 // debug에서 개발용 로그인 대신 실제 Google 로그인을 시험하려면 gradle.properties에 realLogin=true
 val realLogin = providers.gradleProperty("realLogin").orElse("false").get()
+val releaseApiBaseUrl = providers.gradleProperty("releaseApiBaseUrl").orElse("https://api.example.invalid").get()
+fun javaString(value: String) = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"")
+    .replace("\n", "\\n").replace("\r", "\\r") + "\""
 
 android {
     namespace = "com.kimyubin33.audioapp"
@@ -25,7 +30,7 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", javaString(googleWebClientId))
     }
 
     buildTypes {
@@ -35,8 +40,8 @@ android {
             buildConfigField("boolean", "DEV_LOGIN", (realLogin != "true").toString())
         }
         release {
-            // 실제 서버가 생기기 전까지는 연결될 수 없는 예약 주소(.invalid)를 둔다.
-            buildConfigField("String", "API_BASE_URL", "\"https://api.example.invalid\"")
+            // ~/.gradle/gradle.properties 또는 CI의 -P 인자로 운영 주소를 공급한다.
+            buildConfigField("String", "API_BASE_URL", javaString(releaseApiBaseUrl))
             buildConfigField("boolean", "DEV_LOGIN", "false")
             // R8 축소·최적화. 템플릿의 packageScope(라이브러리 패키지만 처리)는 실행 시작 중
             // IllegalAccessError(kotlin.collections.* 접근 불가)를 일으켜 빼고, 앱 전체를 일관되게 처리한다.
@@ -55,6 +60,30 @@ android {
         buildConfig = true
     }
 }
+
+val validateReleaseConfiguration = tasks.register("validateReleaseConfiguration") {
+    group = "verification"
+    description = "Reject missing or development API/OAuth settings before a release build."
+    inputs.property("apiBaseUrl", releaseApiBaseUrl)
+    inputs.property("googleClientId", googleWebClientId)
+    doLast {
+        val uri = runCatching { URI(inputs.properties["apiBaseUrl"].toString()) }.getOrNull()
+        val host = uri?.host?.lowercase().orEmpty()
+        check(uri?.scheme == "https" && host.contains('.') &&
+            !host.endsWith(".invalid") && !host.endsWith(".test") &&
+            host != "example.com" && !host.endsWith(".example.com") &&
+            !host.matches(Regex("[0-9.]+")) && !host.contains(':') &&
+            !host.endsWith(".localhost") && !host.endsWith(".local") &&
+            uri.userInfo == null && uri.query == null && uri.fragment == null &&
+            (uri.path.isNullOrEmpty() || uri.path == "/")) {
+            "Set releaseApiBaseUrl to the deployed HTTPS API origin. Development/placeholder URLs cannot be released."
+        }
+        check(Regex("[A-Za-z0-9_-]+\\.apps\\.googleusercontent\\.com").matches(inputs.properties["googleClientId"].toString())) {
+            "Set googleWebClientId to the production Google OAuth web client ID."
+        }
+    }
+}
+tasks.matching { it.name == "preReleaseBuild" }.configureEach { dependsOn(validateReleaseConfiguration) }
 
 dependencies {
     implementation("net.java.dev.jna:jna:5.17.0@aar")

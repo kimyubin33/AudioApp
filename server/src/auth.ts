@@ -106,7 +106,7 @@ async function googleKeys(forceRefresh: boolean): Promise<Jwk[]> {
  * Google이 발급한 ID 토큰을 검증하고 계정 고유값(sub)을 돌려준다. 실패하면 null.
  * 확인하는 것: 서명(Google 공개키), 발급자(iss), 받는 사람(aud = 우리 웹 클라이언트 ID), 만료(exp).
  */
-export async function verifyGoogleIdToken(env: AppEnv, idToken: string, nowSeconds = Math.floor(Date.now() / 1000)): Promise<string | null> {
+export async function verifyGoogleIdToken(env: AppEnv, idToken: string, nowSeconds = Math.floor(Date.now() / 1000), maxAgeSeconds?: number): Promise<string | null> {
   // 로컬 개발 전용 우회. DEV_MODE는 .dev.vars 에만 두고 배포 환경에는 설정하지 않는다.
   if (env.DEV_MODE === '1' && idToken === DEV_ID_TOKEN) return 'dev-user';
 
@@ -147,6 +147,7 @@ export async function verifyGoogleIdToken(env: AppEnv, idToken: string, nowSecon
   if (aud !== env.GOOGLE_CLIENT_ID && !(Array.isArray(aud) && aud.includes(env.GOOGLE_CLIENT_ID))) return reject('audience-mismatch');
   if (typeof claims.exp !== 'number' || claims.exp + CLOCK_SKEW_SECONDS <= nowSeconds) return reject('expired');
   if (typeof claims.iat === 'number' && claims.iat - CLOCK_SKEW_SECONDS > nowSeconds) return reject('issued-in-future');
+  if (maxAgeSeconds !== undefined && (typeof claims.iat !== 'number' || !Number.isFinite(claims.iat) || nowSeconds - claims.iat > maxAgeSeconds)) return reject('reauth-required');
   const sub = claims.sub;
   return typeof sub === 'string' && sub.length > 0 && sub.length <= 255 ? sub : reject('bad-sub');
 }

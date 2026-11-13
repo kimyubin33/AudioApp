@@ -4,7 +4,9 @@
 export const REPORT_REASONS = ['spam', 'inappropriate', 'copyright', 'missing_ai_label', 'other'] as const;
 export type ReportReason = (typeof REPORT_REASONS)[number];
 
-export const CONTENT_KINDS = ['audio', 'short_video'] as const;
+export const CONTENT_KINDS = ['audio', 'short_video', 'post'] as const;
+export const SHORT_STYLES = ['story', 'moment'] as const;
+export const isShortStyle = (value: unknown): value is typeof SHORT_STYLES[number] => SHORT_STYLES.includes(value as typeof SHORT_STYLES[number]);
 export type ContentKind = (typeof CONTENT_KINDS)[number];
 
 export const TITLE_MAX = 100;
@@ -63,7 +65,7 @@ export function isContentKind(value: unknown): value is ContentKind {
 }
 
 export function maxSecondsFor(kind: ContentKind): number {
-  return kind === 'audio' ? AUDIO_MAX_SECONDS : VIDEO_MAX_SECONDS;
+  return kind === 'post' ? 0 : kind === 'audio' ? AUDIO_MAX_SECONDS : VIDEO_MAX_SECONDS;
 }
 
 /** https 주소만. 계정정보(user:pw@)·프래그먼트 불가. 서명용 쿼리는 허용. */

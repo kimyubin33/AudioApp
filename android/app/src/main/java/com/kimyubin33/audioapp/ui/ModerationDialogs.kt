@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -44,10 +46,11 @@ private const val DETAIL_MAX_CHARS = 500
 fun ReportDialog(
     submitting: Boolean,
     onDismiss: () -> Unit,
-    onSubmit: (ReportReason, String?) -> Unit,
+    onSubmit: (ReportReason, String?, Boolean) -> Unit,
 ) {
     var reason by remember { mutableStateOf<ReportReason?>(null) }
     var detail by remember { mutableStateOf("") }
+    var creatorReport by remember { mutableStateOf(false) }
 
     val trimmed = detail.trim()
     val canSubmit = !submitting && reason != null && (reason != ReportReason.OTHER || trimmed.isNotEmpty())
@@ -57,12 +60,22 @@ fun ReportDialog(
         containerColor = MaterialTheme.colorScheme.surface,
         title = { Text("신고하기") },
         text = {
-            Column {
+            Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text("신고 대상",style=MaterialTheme.typography.labelLarge)
+                listOf(false to "이 오디오",true to "크리에이터").forEach { (value,label) ->
+                    Row(Modifier.fillMaxWidth().selectable(selected=creatorReport==value,enabled=!submitting,role=Role.RadioButton,onClick={creatorReport=value}),
+                        verticalAlignment=Alignment.CenterVertically) {
+                        RadioButton(selected=creatorReport==value,onClick=null,enabled=!submitting)
+                        Text(label,Modifier.padding(12.dp))
+                    }
+                }
+                Text("사칭·개인정보 노출은 기타를 선택해 설명해 주세요. 불필요한 개인정보는 적지 마세요.",
+                    style=MaterialTheme.typography.bodySmall)
                 reasonLabels.forEach { (value, label) ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .selectable(selected = reason == value, role = Role.RadioButton) { reason = value },
+                            .selectable(selected = reason == value, enabled = !submitting, role = Role.RadioButton) { reason = value },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
@@ -83,6 +96,7 @@ fun ReportDialog(
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = detail,
+                    enabled = !submitting,
                     onValueChange = { if (it.length <= DETAIL_MAX_CHARS) detail = it },
                     label = { Text(if (reason == ReportReason.OTHER) "설명 (필수)" else "설명 (선택)") },
                     minLines = 2,
@@ -93,7 +107,7 @@ fun ReportDialog(
         },
         confirmButton = {
             TextButton(
-                onClick = { onSubmit(reason!!, trimmed.ifEmpty { null }) },
+                onClick = { onSubmit(reason!!, trimmed.ifEmpty { null }, creatorReport) },
                 enabled = canSubmit,
             ) { Text(if (submitting) "보내는 중..." else "신고") }
         },

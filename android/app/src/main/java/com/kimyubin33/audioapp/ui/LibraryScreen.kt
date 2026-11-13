@@ -73,7 +73,7 @@ private fun LibraryRow(entry: LibraryEntry, onOpen: (String) -> Unit) {
             Text(entry.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(2.dp))
             Text(
-                text = metaLine(entry.creator, entry.isVideo, entry.aiGenerated),
+                text = metaLine(entry.creator, entry.isVideo, entry.aiGenerated, entry.isPost,entry.shortStyle),
                 style = MaterialTheme.typography.bodySmall,
                 color = Ash,
                 maxLines = 1,

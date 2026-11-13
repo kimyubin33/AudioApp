@@ -124,6 +124,15 @@ test('Google ID 토큰: sub가 없으면 거부', async () => {
   assert.equal(await verifyGoogleIdToken(env, await googleToken(claims), NOW), null);
 });
 
+test('탈퇴 재인증은 최근 5분 내 발급된 Google 토큰만 허용', async () => {
+  assert.equal(await verifyGoogleIdToken(env, await googleToken(goodClaims()), NOW, 300), '1234567890');
+  assert.equal(await verifyGoogleIdToken(env, await googleToken({ ...goodClaims(), iat: NOW - 301 }), NOW, 300), null);
+  const claims = goodClaims();
+  delete claims.iat;
+  assert.equal(await verifyGoogleIdToken(env, await googleToken(claims), NOW, 300), null);
+  assert.equal(await verifyGoogleIdToken(env, await googleToken({ ...goodClaims(), iat: NOW - 301 }), NOW), '1234567890');
+});
+
 test('개발용 우회는 DEV_MODE=1 일 때만', async () => {
   assert.equal(await verifyGoogleIdToken({ ...env, DEV_MODE: '1' }, 'dev-id-token', NOW), 'dev-user');
   assert.equal(await verifyGoogleIdToken(env, 'dev-id-token', NOW), null); // DEV_MODE 없으면 그냥 잘못된 토큰

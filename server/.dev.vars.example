@@ -4,6 +4,16 @@
 # 1이면 'dev-id-token' 으로 로그인할 수 있다 (Google 검증을 건너뜀). 로컬 개발 전용! 배포 환경에는 절대 두지 않는다.
 DEV_MODE=1
 
+# 기본은 오디오 전용. 기존 쇼츠/게시글 회귀 테스트에서만 DEV_MODE=1과 함께 명시적으로 켠다.
+# 운영에서는 이 값을 1로 지정해도 확장 형식이 활성화되지 않는다.
+ENABLE_EXTENDED_FORMATS=0
+
+# 업로드 예약 기준: 최근 24시간 50건·512MiB, 사용자별 보관+예약 합계 2GiB.
+# 양의 정수만 허용. 취소/실패도 당일 한도에 포함하고 R2 정리 완료 전까지 공간을 예약한다.
+UPLOAD_DAILY_COUNT=50
+UPLOAD_DAILY_BYTES=536870912
+UPLOAD_STORAGE_BYTES=2147483648
+
 # 접근 토큰 서명용 비밀값. 배포용은 길고 무작위여야 한다 (예: openssl rand -base64 48).
 TOKEN_SECRET=local-dev-secret-change-me-local-dev-secret-change-me
 
@@ -13,3 +23,11 @@ GOOGLE_CLIENT_ID=dev-client-id.apps.googleusercontent.com
 # API 공개 HTTPS 원점 (생략하면 요청 원점). R2는 비공개로 유지한다.
 # 앱 TLS 프록시 개발 시 예: API_BASE_URL=https://10.0.2.2:8443
 API_BASE_URL=
+
+# 운영자가 공개하고 검토한 문서만 연결한다. 빈 값이면 운영 가입/제출을 차단한다.
+# 문서 내용이 변경되어 재동의가 필요하면 POLICY_VERSION을 변경한다.
+POLICY_VERSION=
+TERMS_URL=
+PRIVACY_URL=
+CREATOR_TERMS_URL=
+SUPPORT_EMAIL=

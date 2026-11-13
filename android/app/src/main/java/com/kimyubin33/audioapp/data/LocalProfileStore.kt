@@ -27,6 +27,11 @@ class LocalProfileStore(context: Context) {
         return File(root, key)
     }
 
+    fun deleteAccount(userId: String) {
+        val dir = directory(userId)
+        if (dir.exists()) check(dir.deleteRecursively())
+    }
+
     fun avatar(profile: LocalProfile): File? = profile.avatarId?.let { id ->
         require(UUID_RE.matches(id))
         File(directory(profile.userId), "$id.jpg")

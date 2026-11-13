@@ -15,6 +15,8 @@ data class LibraryEntry(
     val aiGenerated: Boolean,
     val isVideo: Boolean,
     val atMillis: Long,
+    val isPost: Boolean = false,
+    val shortStyle: String? = null,
 )
 
 /**
@@ -80,7 +82,7 @@ class LocalLibrary private constructor(context: Context) {
                     .put("creator", it.creator)
                     .put("ai", it.aiGenerated)
                     .put("video", it.isVideo)
-                    .put("at", it.atMillis)
+                    .put("at", it.atMillis).put("post",it.isPost).put("short_style",it.shortStyle ?: JSONObject.NULL)
             )
         }
         prefs.edit().putString(key, array.toString()).apply()
@@ -98,7 +100,7 @@ class LocalLibrary private constructor(context: Context) {
                     val title = o.optString("title").trim()
                     val creator = o.optString("creator")
                     if (!ID_RE.matches(id) || !ID_RE.matches(creator) || title.isEmpty() || title.length > TITLE_MAX) continue
-                    add(LibraryEntry(id, title, creator, o.optBoolean("ai", true), o.optBoolean("video", false), o.optLong("at", 0L)))
+                    add(LibraryEntry(id, title, creator, o.optBoolean("ai", true), o.optBoolean("video", false), o.optLong("at", 0L),o.optBoolean("post",false),o.optString("short_style").takeIf { it in setOf("Story","Moment") }))
                 }
             }.distinctBy { it.id }
         } catch (e: Exception) {

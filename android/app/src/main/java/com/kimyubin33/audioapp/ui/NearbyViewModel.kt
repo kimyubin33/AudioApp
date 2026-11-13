@@ -5,6 +5,13 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kimyubin33.audioapp.data.AudioApi
+import com.kimyubin33.audioapp.data.RadioCatalog
+import com.kimyubin33.audioapp.data.SessionSignals
+import kotlinx.coroutines.flow.drop
+import com.kimyubin33.audioapp.data.location.AudioRegion
+import com.kimyubin33.audioapp.data.location.RegionPoint
+import com.kimyubin33.audioapp.data.location.audioRegions
+import com.kimyubin33.audioapp.data.location.contains
 import com.kimyubin33.audioapp.data.location.EncounterTracker
 import com.kimyubin33.audioapp.data.location.LocationProblem
 import com.kimyubin33.audioapp.data.location.LocationSample
@@ -17,7 +24,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import uniffi.audio_core.ContentKind
 import uniffi.audio_core.NearbyItem
 import kotlin.math.roundToInt
 
@@ -29,9 +35,10 @@ data class NearbyCard(
 data class NearbyUiState(
     val enabled: Boolean = false, val problem: LocationProblem? = null,
     val precise: Boolean = false, val accuracyMeters: Int? = null,
-    val radiusMeters: Int = 1000, val loading: Boolean = false, val loaded: Boolean = false,
+    val radiusMeters: Int = 10000, val loading: Boolean = false, val loaded: Boolean = false,
     val items: List<NearbyCard> = emptyList(), val error: String? = null,
     val truncated: Boolean = false, val encounters: Int = 0,
+    val regions: List<AudioRegion> = emptyList(),
 )
 
 /** 사용자의 좌표는 SavedState/디스크에 쓰지 않는다. 탐색을 떠나면 요청과 좌표를 즉시 비운다. */
@@ -50,6 +57,15 @@ class NearbyViewModel(application: Application) : AndroidViewModel(application) 
     private var met = emptySet<String>()
     private val source = PhoneLocationSource(application, ::receive, ::problem)
 
+    init {
+        viewModelScope.launch {
+            SessionSignals.changes.drop(1).collect {
+                invalidate()
+                _state.value = _state.value.copy(items=emptyList(),regions=emptyList(),loaded=false)
+                if(foreground && _state.value.enabled) start()
+            }
+        }
+    }
     fun hasPermission() = source.hasPermission()
     fun enable() {
         _state.value = _state.value.copy(enabled = true)
@@ -100,7 +116,8 @@ class NearbyViewModel(application: Application) : AndroidViewModel(application) 
         queried = null
         queriedAt = 0
         results = emptyList()
-        _state.value = _state.value.copy(loading = false)
+        RadioCatalog.clearNearby()
+        _state.value = _state.value.copy(loading = false, regions = emptyList())
     }
     private fun problem(value: LocationProblem) {
         if (value != LocationProblem.Waiting) {
@@ -154,7 +171,7 @@ class NearbyViewModel(application: Application) : AndroidViewModel(application) 
                 if (!source.hasPermission()) { problem(LocationProblem.Permission); return@launch }
                 val current = sample
                 if (current == null || !current.isFresh(SystemClock.elapsedRealtime())) { problem(LocationProblem.Stale); return@launch }
-                results = page.items
+                results = page.items.filter { it.item.content.kind == uniffi.audio_core.ContentKind.AUDIO }
                 _state.value = _state.value.copy(loaded = true, loading = false, truncated = page.truncated)
                 updateCards(current)
             } catch (e: CancellationException) { throw e }
@@ -169,14 +186,17 @@ class NearbyViewModel(application: Application) : AndroidViewModel(application) 
         }.map { it.item.id }.toSet()
         met = encounters.update(inside, fix.elapsedMillis)
         val cards = results.map { row ->
-            val content = row.item.content
-            NearbyCard(HomeItem(row.item.id, content.title, content.creatorId, content.aiGenerated, content.kind == ContentKind.SHORT_VIDEO),
+            NearbyCard(row.item.toHomeItem(),
                 row.location.name, row.location.character, row.location.story,
                 fix.distanceTo(row.location.latitude, row.location.longitude).roundToInt(),
                 fix.isInside(row.location.latitude, row.location.longitude, row.location.radiusMeters.toInt()), row.item.id in met,
                 row.location.latitude, row.location.longitude)
         }.filter { it.distanceMeters <= _state.value.radiusMeters }.sortedBy { it.distanceMeters }
-        _state.value = _state.value.copy(items = cards, encounters = met.size)
+        val regions = audioRegions(results.map {
+            RegionPoint(it.item.id,it.location.name,it.location.latitude,it.location.longitude,it.location.radiusMeters.toInt())
+        },fix)
+        RadioCatalog.updateNearby(regions.filter { it.contains(fix.accuracyMeters) }.flatMap { it.contentIds })
+        _state.value = _state.value.copy(items = cards, encounters = met.size, regions = regions)
     }
-    override fun onCleared() { source.stop(); super.onCleared() }
+    override fun onCleared() { source.stop(); RadioCatalog.clearNearby(); super.onCleared() }
 }

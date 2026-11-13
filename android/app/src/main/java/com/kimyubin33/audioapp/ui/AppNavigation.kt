@@ -1,6 +1,11 @@
 package com.kimyubin33.audioapp.ui
 
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LinearProgressIndicator
+
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -81,6 +86,12 @@ private data object MemoryEditorRoute : NavKey
 private data class MemoryDetailRoute(val id: String) : NavKey
 
 @Serializable
+private data class ReportsRoute(val userId: String) : NavKey
+
+@Serializable
+private data class PostRoute(val id:String) : NavKey
+
+@Serializable
 private data class PlayerRoute(
     val trackId: String,
     val title: String,
@@ -130,13 +141,14 @@ fun AppNavigation(
 
     fun openContent(id: String) {
         val origin = backStack.lastOrNull()
-        if (opening || (origin != HomeRoute && origin != NearbyRoute)) return
+        if (opening || (origin != HomeRoute && origin != NearbyRoute && origin !is PostRoute)) return
         opening = true
         notice = null
         scope.launch {
             try {
                 val detail = viewModel.loadDetail(id)
                 if (backStack.lastOrNull() != origin) return@launch
+                if (detail.item.content.kind != ContentKind.AUDIO) { notice = "현재 버전에서는 오디오만 재생할 수 있습니다."; return@launch }
                 onPlayRequested()
                 playContent(player, detail)
                 viewModel.recordPlay(detail)
@@ -163,17 +175,22 @@ fun AppNavigation(
     // 로그인이 필요한 동작에서 로그인이 안 돼 있으면 로그인 안내 창을 띄운다
     var loginPrompt by remember { mutableStateOf(false) }
     var signingIn by remember { mutableStateOf(false) }
+    var policyMode by remember { mutableStateOf<String?>(null) }
+    var deletionTarget by remember { mutableStateOf<String?>(null) }
+    var deletionNotice by remember { mutableStateOf<String?>(null) }
+    var deletionError by remember { mutableStateOf<String?>(null) }
+    fun signIn() { loginPrompt = false; policyMode = "login" }
 
     fun failed(e: Exception) {
         if (e is NetException.Unauthorized) loginPrompt = true else toast(userMessage(e))
     }
 
-    fun signIn() {
+    fun performSignIn(version: String) {
         if (signingIn) return
         signingIn = true
         scope.launch {
             try {
-                when (GoogleSignIn.signIn(context)) {
+                when (GoogleSignIn.signIn(context, version)) {
                     SignInResult.Success -> {
                         loginPrompt = false
                         toast("로그인했습니다.")
@@ -228,12 +245,9 @@ fun AppNavigation(
                         val stale=when(kind) { FeedKind.Audio->feed.stale; FeedKind.Subscribed->subs.stale; else->false }
                         LaunchedEffect(tab,stale) { kind?.let(viewModel::loadIfNeeded) }
                         LaunchedEffect(tab) {
-                            if(tab==MainTab.Subscriptions) viewModel.refreshSubscriptions()
+                            if(tab==MainTab.Subscriptions || tab==MainTab.Feed) viewModel.refreshSubscriptions()
                             if(tab==MainTab.Library) accountViewModel.refresh()
                             player.repeatMode=Player.REPEAT_MODE_OFF
-                        }
-                        fun createMemory() {
-                            if(backStack.lastOrNull()==HomeRoute) backStack.add(MemoryEditorRoute)
                         }
                         fun upload() {
                             if(backStack.lastOrNull()==HomeRoute) { player.pause(); backStack.add(CreatorRoute) }
@@ -242,35 +256,34 @@ fun AppNavigation(
                             Box(Modifier.weight(1f)) {
                                 when(tab) {
                                     MainTab.Feed -> FeedScreen(
-                                        title="피드",emptyMessage="게시물이 없습니다.",
+                                        title="피드",emptyMessage="오디오가 없습니다.",
                                         items=feed.items,loading=feed.loading,error=feed.error,hasMore=feed.nextCursor!=null,notice=notice,
-                                        onOpen=::openContent,onRetry={viewModel.retry(FeedKind.Audio)},onLoadMore={viewModel.loadMore(FeedKind.Audio)},
-                                        onCreateMemory=::createMemory,
+                                        onOpen=::openContent,onRetry={if(format==FeedFormat.Subscribed && feed.error==userMessage(NetException.Unauthorized())) loginPrompt=true else viewModel.retry(FeedKind.Audio)},onLoadMore={viewModel.loadMore(FeedKind.Audio)},
+                                        onCreateMemory=null,
                                         searchQuery=searchQuery,onSearch=viewModel::search,format=format,onFormat=viewModel::selectFormat,
-                                        onOpenShorts={if(backStack.lastOrNull()==HomeRoute) { player.pause(); backStack.add(ShortsRoute) }},
                                     )
                                     MainTab.Places -> NearbyScreen(nearbyViewModel,
-                                        onBack={tab=MainTab.Feed},onOpen=::openContent,notice=notice,embedded=true,
+                                        onBack={tab=MainTab.Feed},onOpen=::openContent,notice=notice,embedded=true,player=player,
                                         onSearchPlace={query->viewModel.search(query);tab=MainTab.Feed})
                                     MainTab.Create -> {
                                         // 이전 버전에서 저장된 창작 탭도 새 업로드 입구로 복원한다.
                                         LaunchedEffect(Unit) { tab=MainTab.Feed; upload() }
                                     }
                                     MainTab.Subscriptions -> FeedScreen(
-                                        title="구독",emptyMessage="구독한 게시물이 없습니다.",
+                                        title="구독",emptyMessage="구독한 오디오가 없습니다.",
                                         items=subs.items,loading=subs.loading,error=subs.error,hasMore=subs.nextCursor!=null,notice=notice,
                                         onOpen=::openContent,
                                         onRetry={if(subs.error==userMessage(NetException.Unauthorized())) loginPrompt=true else viewModel.retry(FeedKind.Subscribed)},
                                         onLoadMore={viewModel.loadMore(FeedKind.Subscribed)},
                                     )
                                     MainTab.Library -> LibraryScreen(
-                                        history=history,saved=saved,onOpen=::openContent,account=account,
+                                        history=history.filterNot { it.isVideo || it.isPost },saved=saved.filterNot { it.isVideo || it.isPost },onOpen=::openContent,account=account,
                                         onAccount={if(backStack.lastOrNull()==HomeRoute) backStack.add(AccountRoute)},
                                     )
                                 }
                             }
                             val currentId=playback.mediaId
-                            if(currentId!=null) MiniPlayer(
+                            if(currentId!=null && tab!=MainTab.Places) MiniPlayer(
                                 artSeed=currentId,isVideo=playback.isVideo,title=playback.title,
                                 subtitle=metaLine(playback.creatorId,playback.isVideo,playback.aiGenerated),
                                 isPlaying=playback.isPlaying,onTogglePlay={if(playback.isPlaying) player.pause() else player.play()},
@@ -297,7 +310,19 @@ fun AppNavigation(
                                 catch (_: android.content.ActivityNotFoundException) { toast("기기 설정을 열 수 없습니다.") }
                             },
                             onSignOut={player.pause();player.clearMediaItems();accountViewModel.signOut()},
-                            onRetry=accountViewModel::refresh,developerLogin=BuildConfig.DEBUG&&BuildConfig.DEV_LOGIN)
+                            onRetry=accountViewModel::refresh,developerLogin=BuildConfig.DEBUG&&BuildConfig.DEV_LOGIN,
+                            onLegal={policyMode="browse"},
+                            onReports={account.userId?.let { if(backStack.lastOrNull()==AccountRoute) backStack.add(ReportsRoute(it)) }},
+                            onDeleteAccount={deletionError=null;deletionTarget=account.userId})
+                    }
+
+                    is ReportsRoute -> NavEntry(key) {
+                        val account by accountViewModel.state.collectAsState()
+                        if(account.userId==key.userId) ReportsScreen(key.userId,
+                            onBack={backStack.removeLastOrNull()},onPolicies={policyMode="browse"})
+                        else LaunchedEffect(account.loading) {
+                            if(!account.loading && backStack.lastOrNull()==key) backStack.removeLastOrNull()
+                        }
                     }
 
                     is ProfileRoute -> NavEntry(key) {
@@ -308,84 +333,9 @@ fun AppNavigation(
                         }
                     }
 
-                    is MomentsRoute -> NavEntry(key) {
-                        val album by memoryViewModel.state.collectAsState()
-                        MomentsScreen(album,memoryViewModel::photo,onBack={backStack.removeLastOrNull()},
-                            onCreate={if(backStack.lastOrNull()==MomentsRoute) backStack.add(MemoryEditorRoute)},
-                            onOpen={id->if(backStack.lastOrNull()==MomentsRoute) backStack.add(MemoryDetailRoute(id))},
-                            onRetry=memoryViewModel::reload)
-                    }
-
-                    is ShortsRoute -> NavEntry(key) {
-                        val shorts by viewModel.feed(FeedKind.Shorts).collectAsState()
-                        val subscribed by viewModel.subscribed.collectAsState()
-                        val saved by viewModel.saved.collectAsState()
-                        val savedIds=remember(saved) { saved.map { it.id }.toSet() }
-                        LaunchedEffect(shorts.stale) {
-                            viewModel.loadIfNeeded(FeedKind.Shorts)
-                            viewModel.refreshSubscriptions()
-                        }
-                        androidx.compose.runtime.DisposableEffect(player) {
-                            player.repeatMode=Player.REPEAT_MODE_ONE
-                            onDispose { player.pause(); player.repeatMode=Player.REPEAT_MODE_OFF }
-                        }
-                        Column {
-                            TextButton(onClick={backStack.removeLastOrNull()}){Text("피드로 돌아가기")}
-                            Box(Modifier.weight(1f)) {
-                                ShortsScreen(
-                                        player = player,
-                                        state = shorts,
-                                        active = true,
-                                        playback = playback,
-                                        subscribed = subscribed,
-                                        savedIds = savedIds,
-                                        onPageSelected = { item ->
-                                            try {
-                                                val detail = viewModel.loadDetail(item.id)
-                                                onPlayRequested()
-                                                playContent(player, detail)
-                                                viewModel.recordPlay(detail)
-                                            } catch (e: CancellationException) {
-                                                throw e
-                                            } catch (e: Exception) {
-                                                toast(userMessage(e))
-                                            }
-                                        },
-                                        onLoadMore = { viewModel.loadMore(FeedKind.Shorts) },
-                                        onRetry = { viewModel.retry(FeedKind.Shorts) },
-                                        onToggleSubscribe = ::toggleSubscribe,
-                                        onToggleSave = { toggleSave(it.toLibraryEntry()) },
-                                        onReport = {
-                                            target = ModerationTarget(it.id, it.creator)
-                                            dialog = ModerationDialog.Report
-                                        },
-                                        onBlock = {
-                                            target = ModerationTarget(it.id, it.creator)
-                                            dialog = ModerationDialog.Block
-                                        },
-                                    )
-                            }
-                        }
-                    }
-
-                    is MemoryEditorRoute -> NavEntry(key) {
-                        MemoryEditorScreen(memoryViewModel,onBack={backStack.removeLastOrNull()},onSave={
-                            scope.launch {
-                                val id=memoryViewModel.saveMemory()
-                                if(id!=null && backStack.lastOrNull()==MemoryEditorRoute) {
-                                    backStack.removeLastOrNull()
-                                    backStack.add(MemoryDetailRoute(id))
-                                }
-                            }
-                        })
-                    }
-
-                    is MemoryDetailRoute -> NavEntry(key) {
-                        val state by memoryViewModel.state.collectAsState()
-                        val memory=state.album.memories.find { it.id==key.id }
-                        MemoryDetailScreen(memory,memory?.photoId?.let(memoryViewModel::photo),state.busy,state.error,
-                            onBack={backStack.removeLastOrNull()},
-                            onDelete={scope.launch { if(memoryViewModel.deleteMemory(key.id) && backStack.lastOrNull()==key) backStack.removeLastOrNull() }})
+                    // Restore old navigation safely after the audio-only update; keep stored data intact.
+                    is MomentsRoute, is PostRoute, is ShortsRoute, is MemoryEditorRoute, is MemoryDetailRoute -> NavEntry(key) {
+                        LaunchedEffect(Unit) { backStack.clear(); backStack.add(HomeRoute) }
                     }
 
                     is NearbyRoute -> NavEntry(key) {
@@ -437,36 +387,43 @@ fun AppNavigation(
                     }
 
                     is PlayerRoute -> NavEntry(key) {
+                        if(key.isVideo) {
+                            LaunchedEffect(Unit) { backStack.clear(); backStack.add(HomeRoute) }
+                            return@NavEntry
+                        }
+                        val current = playback.mediaId?.takeIf { it != com.kimyubin33.audioapp.data.RadioCatalog.MIX }?.let {
+                            PlayerRoute(it,playback.title,playback.creatorId,playback.aiGenerated,false)
+                        } ?: key
                         val subscribed by viewModel.subscribed.collectAsState()
                         val saved by viewModel.saved.collectAsState()
                         PlayerScreen(
                             player = player,
-                            artSeed = key.trackId,
-                            title = key.title,
-                            creator = key.creator,
-                            aiGenerated = key.aiGenerated,
-                            isVideo = key.isVideo,
-                            subscribed = key.creator in subscribed,
-                            saved = saved.any { it.id == key.trackId },
-                            onToggleSubscribe = { toggleSubscribe(key.creator) },
+                            artSeed = current.trackId,
+                            title = current.title,
+                            creator = current.creator,
+                            aiGenerated = current.aiGenerated,
+                            isVideo = current.isVideo,
+                            subscribed = current.creator in subscribed,
+                            saved = saved.any { it.id == current.trackId },
+                            onToggleSubscribe = { toggleSubscribe(current.creator) },
                             onToggleSave = {
                                 toggleSave(
                                     LibraryEntry(
-                                        id = key.trackId,
-                                        title = key.title,
-                                        creator = key.creator,
-                                        aiGenerated = key.aiGenerated,
-                                        isVideo = key.isVideo,
+                                        id = current.trackId,
+                                        title = current.title,
+                                        creator = current.creator,
+                                        aiGenerated = current.aiGenerated,
+                                        isVideo = current.isVideo,
                                         atMillis = System.currentTimeMillis(),
                                     )
                                 )
                             },
                             onReport = {
-                                target = ModerationTarget(key.trackId, key.creator)
+                                target = ModerationTarget(current.trackId, current.creator)
                                 dialog = ModerationDialog.Report
                             },
                             onBlock = {
-                                target = ModerationTarget(key.trackId, key.creator)
+                                target = ModerationTarget(current.trackId, current.creator)
                                 dialog = ModerationDialog.Block
                             },
                         )
@@ -477,11 +434,57 @@ fun AppNavigation(
             },
         )
 
+        policyMode?.let { mode ->
+            PolicyDialog(mode, onDismiss={policyMode=null}, onAccept={version->policyMode=null;performSignIn(version)})
+        }
+        deletionTarget?.let { expectedId ->
+            AlertDialog(onDismissRequest={if(!signingIn)deletionTarget=null},
+                title={Text("계정을 삭제할까요?")},
+                text={androidx.compose.foundation.layout.Column {
+                    Text("계정과 업로드 콘텐츠의 공개를 중지하고 서버 데이터와 원본 파일 삭제를 접수합니다. Google 계정 자체는 삭제되지 않습니다. 처리 중에는 다시 가입할 수 없습니다.")
+                    Text("이 기기의 프로필과 해당 계정에 연결된 제출 초안을 정리합니다. 미제출 초안·청취 기록·저장 목록은 기기에 남으며 따로 삭제할 수 있습니다.")
+                    Text("현재 로그인한 계정과 같은 Google 계정으로 다시 확인해 주세요.")
+                    deletionError?.let { Text(it,color=MaterialTheme.colorScheme.error) }
+                    if(signingIn) LinearProgressIndicator()
+                }},
+                confirmButton={TextButton(enabled=!signingIn,onClick={
+                    signingIn=true;deletionError=null
+                    scope.launch {
+                        try {
+                            check(accountViewModel.state.value.userId==expectedId)
+                            val status=GoogleSignIn.requestDeletion(context)
+                            player.stop();player.clearMediaItems()
+                            var cleanupFailed=false
+                            try { creatorViewModel.removeDeletedAccountDrafts(expectedId) }
+                            catch (e:CancellationException){throw e}
+                            catch (_:Exception){cleanupFailed=true}
+                            try { accountViewModel.finishDeletion(expectedId) }
+                            catch (e:CancellationException){throw e}
+                            catch (_:Exception){cleanupFailed=true}
+                            deletionTarget=null
+                            deletionNotice=(if(status=="deleted") "계정 삭제가 완료되었습니다." else
+                                "삭제 요청을 접수했습니다. 계정 접근과 콘텐츠 공개는 중지되었으며, 전송 중인 파일이 정리된 뒤 서버 데이터 삭제를 진행합니다.") +
+                                if(cleanupFailed) "\n이 기기의 일부 데이터 정리에 실패했습니다. 앱 저장 공간에서 데이터를 삭제해 주세요." else ""
+                            viewModel.markAllStale()
+                        } catch(e:androidx.credentials.exceptions.GetCredentialCancellationException) {
+                            deletionError="계정 확인을 취소했습니다."
+                        } catch(e:CancellationException){throw e}
+                        catch (_:Exception){deletionError="삭제 요청을 확인하지 못했습니다. 같은 Google 계정인지 확인하고 다시 시도해 주세요."}
+                        finally{signingIn=false}
+                    }
+                }){Text("재인증하고 삭제 요청")}},
+                dismissButton={TextButton(enabled=!signingIn,onClick={deletionTarget=null}){Text("취소")}})
+        }
+        deletionNotice?.let { message ->
+            AlertDialog(onDismissRequest={deletionNotice=null},title={Text("계정 삭제")},text={Text(message)},
+                confirmButton={TextButton(onClick={deletionNotice=null}){Text("확인")}})
+        }
+
         if (loginPrompt) {
             AlertDialog(
                 onDismissRequest = { loginPrompt = false },
                 title = { Text("로그인이 필요합니다") },
-                text = { Text("구독, 신고, 차단은 Google 계정으로 로그인한 뒤 쓸 수 있습니다. 보는 것과 듣는 것은 로그인 없이 됩니다.") },
+                text = { Text("구독, 신고, 차단은 Google 계정으로 로그인한 뒤 쓸 수 있습니다. 오디오 감상은 로그인 없이 가능합니다.") },
                 confirmButton = { TextButton(onClick = ::signIn, enabled = !signingIn) { Text("Google로 로그인") } },
                 dismissButton = { TextButton(onClick = { loginPrompt = false }) { Text("나중에") } },
             )
@@ -493,11 +496,13 @@ fun AppNavigation(
                 ModerationDialog.Report -> ReportDialog(
                     submitting = submitting,
                     onDismiss = { dialog = null },
-                    onSubmit = { reason, detail ->
+                    onSubmit = { reason, detail, creatorReport ->
                         submitting = true
                         scope.launch {
                             try {
-                                viewModel.report(current.contentId, reason, detail)
+                                if(creatorReport) com.kimyubin33.audioapp.data.AccountActions.withLogin(context) {
+                                    it.reportCreator(current.creator,reason,detail)
+                                } else viewModel.report(current.contentId, reason, detail)
                                 dialog = null
                                 toast("신고가 접수되었습니다.")
                             } catch (e: CancellationException) {
@@ -526,7 +531,7 @@ fun AppNavigation(
                                 player.stop()
                                 player.clearMediaItems()
                                 toast("차단했습니다.")
-                                if (backStack.lastOrNull() is PlayerRoute) backStack.removeLastOrNull()
+                                if (backStack.lastOrNull() is PlayerRoute || backStack.lastOrNull() is PostRoute) backStack.removeLastOrNull()
                                 viewModel.markAllStale()
                             } catch (e: CancellationException) {
                                 throw e

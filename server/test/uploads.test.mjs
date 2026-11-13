@@ -7,7 +7,7 @@ import { buildCommand } from '../scripts/admin-sql.mjs';
 
 const secret = 'integration-test-secret-integration-test-1234';
 const server = createTestHarness({ workers: [{ configPath: './wrangler.toml',
-  secrets: { TOKEN_SECRET: secret, GOOGLE_CLIENT_ID: 'test.apps.googleusercontent.com', DEV_MODE: '1', API_BASE_URL: 'https://api.test' } }] });
+  secrets: { TOKEN_SECRET: secret, GOOGLE_CLIENT_ID: 'test.apps.googleusercontent.com', DEV_MODE: '1', ENABLE_EXTENDED_FORMATS: '1', API_BASE_URL: 'https://api.test' } }] });
 const worker = server.getWorker();
 let env;
 const tokens = {};

@@ -1,9 +1,10 @@
 import type { AppEnv } from './types';
+import { requireFormat } from './features';
 import { HttpError, json, noContent, nowSeconds, readJson, requireAdmin } from './http';
 import { cleanText, isValidId, parseLimit } from './validate';
 
 const statuses = ['pending','approved','rejected','removed'];
-const fields = 'c.id,c.creator_id,c.title,c.kind,c.duration_seconds,c.ai_generated,c.ai_tool,c.status,c.reject_reason,c.created_at,c.revision';
+const fields = 'c.id,c.creator_id,c.title,c.kind,c.duration_seconds,c.ai_generated,c.ai_tool,c.status,c.reject_reason,c.created_at,c.revision,c.short_style';
 export async function adminContents(request: Request, env: AppEnv): Promise<Response> {
   await requireAdmin(request, env);
   const p = new URL(request.url).searchParams;
@@ -44,11 +45,15 @@ export async function reviewContent(id: string, request: Request, env: AppEnv): 
   if (action !== 'approve' && !reason) throw new HttpError(400,'invalid_request');
   if (action === 'approve' && (body.file_reviewed !== true || body.rights_reviewed !== true || body.metadata_reviewed !== true))
     throw new HttpError(400,'review_required');
+  if (action === 'approve') {
+    const target = await env.DB.prepare('SELECT kind FROM contents WHERE id=?').bind(id).first<{kind:string}>();
+    if (target) requireFormat(target.kind,env);
+  }
   const status = action === 'approve'?'approved':action==='reject'?'rejected':'removed';
   const allowed = action === 'remove' ? "('pending','approved')" : "('pending')";
   const result = await env.DB.prepare(`UPDATE contents SET status=?,reject_reason=?,review_actor=?,reviewed_at=?
     WHERE id=? AND revision=? AND status IN ${allowed}
-    AND (? != 'approved' OR object_key IS NOT NULL OR external_url IS NOT NULL)
+    AND (? != 'approved' OR kind='post' OR object_key IS NOT NULL OR external_url IS NOT NULL)
     AND EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin') RETURNING id`)
     .bind(status,reason,user.id,nowSeconds(),id,body.revision as number,status,user.id).first<{id:string}>();
   if (!result) throw new HttpError(409,'revision_conflict');

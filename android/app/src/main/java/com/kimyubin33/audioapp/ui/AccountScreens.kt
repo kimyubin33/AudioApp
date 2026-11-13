@@ -71,6 +71,7 @@ fun AccountScreen(
     onProfile: () -> Unit, onMoments: () -> Unit, onBlocked: () -> Unit,
     onClearHistory: () -> Unit, onPermissions: () -> Unit, onSignOut: () -> Unit, onRetry: () -> Unit,
     developerLogin: Boolean = false,
+    onLegal: () -> Unit = {}, onDeleteAccount: () -> Unit = {}, onReports: () -> Unit = {},
 ) {
     var clearHistory by rememberSaveable { mutableStateOf(false) }
     Box(Modifier.fillMaxSize(),contentAlignment=Alignment.TopCenter) {
@@ -95,10 +96,12 @@ fun AccountScreen(
                 }
                 InkDivider(Modifier.padding(horizontal=24.dp))
             }
-            item { AccountRow("Moments",onMoments) }
+            item { AccountRow("신고 내역",onReports,enabled=state.signedIn&&!state.busy) }
             item { AccountRow("차단 목록",onBlocked,enabled=state.signedIn&&!state.busy) }
-            item { AccountRow("시청 기록 삭제",{clearHistory=true},enabled=!state.busy) }
+            item { AccountRow("청취 기록 삭제",{clearHistory=true},enabled=!state.busy) }
             item { AccountRow("앱 권한",onPermissions) }
+            item { AccountRow("약관 및 개인정보",onLegal) }
+            if(state.signedIn) item { AccountRow("계정 삭제",onDeleteAccount,enabled=!state.busy&&!state.loading) }
             if(state.hasSession || state.signedIn) item { AccountRow("Log out",onSignOut,enabled=!state.busy) }
             item {
                 Text("Version ${BuildConfig.VERSION_NAME}",style=MaterialTheme.typography.bodySmall,
@@ -106,8 +109,8 @@ fun AccountScreen(
             }
         }
     }
-    if(clearHistory) AlertDialog(onDismissRequest={clearHistory=false},title={Text("시청 기록을 삭제할까요?")},
-        text={Text("이 기기의 시청 기록을 모두 삭제합니다. 저장한 콘텐츠와 Moments는 유지됩니다.")},
+    if(clearHistory) AlertDialog(onDismissRequest={clearHistory=false},title={Text("청취 기록을 삭제할까요?")},
+        text={Text("이 기기의 청취 기록을 모두 삭제합니다. 저장한 오디오는 유지됩니다.")},
         confirmButton={TextButton(onClick={clearHistory=false;onClearHistory()}){Text("삭제")}},
         dismissButton={TextButton(onClick={clearHistory=false}){Text("취소")}})
 }

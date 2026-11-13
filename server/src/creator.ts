@@ -1,8 +1,10 @@
 import type { AppEnv } from './types';
+import { requireFormat } from './features';
 import { HttpError, json, noContent, readJson, requireCreator, requireUser } from './http';
 import { isValidId } from './validate';
 import { uploadMetadata } from './upload-validation';
 import { validateSubmission } from './submission';
+import { checkAttachedAudio } from './posts';
 
 export async function creatorProfile(request: Request, env: AppEnv): Promise<Response> {
   const user = await requireUser(request, env);
@@ -38,19 +40,22 @@ export async function editCreatorContent(id: string, request: Request, env: AppE
   const user = await requireCreator(request, env);
   if (!isValidId(id)) throw new HttpError(400, 'invalid_request');
   const body = await readJson(request);
-  const meta = uploadMetadata(body), submission = validateSubmission(body.submission);
-  if (!meta || !submission || !Number.isSafeInteger(body.revision)) throw new HttpError(400, 'invalid_request');
+  if (typeof body.kind === 'string') requireFormat(body.kind,env);
+  const meta = uploadMetadata(body), submission = validateSubmission(body.submission,body.kind==='post');
+  if (!meta || !submission || !Number.isSafeInteger(body.revision) || (meta.kind==='post'&&!submission.description) ||
+      (meta.kind!=='post'&&submission.audio_content_id)) throw new HttpError(400, 'invalid_request');
+  await checkAttachedAudio(submission.audio_content_id,user.id,env);
   const row = await env.DB.prepare('SELECT kind, duration_seconds, submission_json FROM contents WHERE id = ? AND creator_id = ?')
     .bind(id, user.creator_id).first<{ kind: string; duration_seconds: number; submission_json: string | null }>();
   if (!row) throw new HttpError(404, 'not_found');
-  const original = row.submission_json ? validateSubmission(JSON.parse(row.submission_json)) : null;
+  const original = row.submission_json ? validateSubmission(JSON.parse(row.submission_json),row.kind==='post') : null;
   if (!original || JSON.stringify(original.file) !== JSON.stringify(submission.file) ||
       meta.kind !== row.kind || meta.duration_seconds !== row.duration_seconds) throw new HttpError(400, 'file_change_requires_upload');
-  const result = await env.DB.prepare(`UPDATE contents SET title = ?, ai_generated = ?, ai_tool = ?, submission_json = ?,
+  const result = await env.DB.prepare(`UPDATE contents SET title = ?, ai_generated = ?, ai_tool = ?, submission_json = ?, short_style = ?,
       status = 'pending', reject_reason = NULL, revision = revision + 1, review_actor = NULL, reviewed_at = NULL
     WHERE id = ? AND creator_id = ? AND revision = ? AND status IN ('pending', 'rejected')
       AND EXISTS (SELECT 1 FROM users WHERE id = ? AND role IN ('creator', 'admin'))`)
-    .bind(meta.title, meta.ai_generated ? 1 : 0, meta.ai_tool, JSON.stringify(submission), id, user.creator_id, body.revision as number, user.id).run();
+    .bind(meta.title, meta.ai_generated ? 1 : 0, meta.ai_tool, JSON.stringify(submission), meta.short_style, id, user.creator_id, body.revision as number, user.id).run();
   if (result.meta.changes !== 1) throw new HttpError(409, 'revision_conflict');
   return noContent();
 }

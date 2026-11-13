@@ -154,6 +154,8 @@ private fun ShortPage(
             modifier = Modifier.align(Alignment.BottomStart).padding(start = 16.dp, end = 88.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            item.shortStyle?.let{Text(it,style=MaterialTheme.typography.labelMedium,color=Paper,
+                modifier=Modifier.border(1.dp,Paper,RoundedCornerShape(8.dp)).padding(horizontal=8.dp,vertical=3.dp))}
             if (item.aiGenerated) {
                 Text(
                     text = "AI 생성",

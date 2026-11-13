@@ -25,8 +25,22 @@ object GoogleSignIn {
 
     val isConfigured: Boolean get() = BuildConfig.GOOGLE_WEB_CLIENT_ID.isNotBlank()
 
+    /** Reauthenticate without exchanging the token for a new app account/session. */
+    suspend fun requestDeletion(activityContext: Context): String {
+        check(isConfigured)
+        val request = GetCredentialRequest.Builder().addCredentialOption(GetGoogleIdOption.Builder()
+            .setServerClientId(BuildConfig.GOOGLE_WEB_CLIENT_ID).setFilterByAuthorizedAccounts(false)
+            .setAutoSelectEnabled(false).build()).build()
+        val result = CredentialManager.create(activityContext).getCredential(activityContext, request)
+        val credential = result.credential
+        require(credential is CustomCredential && credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL)
+        val token = GoogleIdTokenCredential.createFrom(credential.data).idToken
+        val api = withContext(Dispatchers.IO) { AudioApi.get(activityContext.applicationContext) }
+        return api.requestAccountDeletion(token)
+    }
+
     /** @param activityContext 로그인 창을 띄울 화면(Activity)의 컨텍스트 */
-    suspend fun signIn(activityContext: Context): SignInResult {
+    suspend fun signIn(activityContext: Context, policyVersion: String): SignInResult {
         if (!isConfigured) return SignInResult.NotConfigured
         val option = GetGoogleIdOption.Builder()
             .setServerClientId(BuildConfig.GOOGLE_WEB_CLIENT_ID)
@@ -42,7 +56,7 @@ object GoogleSignIn {
             val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
             val api = withContext(Dispatchers.IO) { AudioApi.get(activityContext.applicationContext) }
             withContext(Dispatchers.IO) { KeystoreTokenStore(activityContext).setDevAutoLoginAllowed(false) }
-            api.signInWithGoogle(idToken)
+            api.signInWithGooglePolicy(idToken, policyVersion)
             SignInResult.Success
         } catch (e: GetCredentialCancellationException) {
             SignInResult.Cancelled

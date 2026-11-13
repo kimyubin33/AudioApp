@@ -33,3 +33,42 @@ test('웹 ZIP: 경로·중복·할당량·CRC·손상·암호화·압축 폭탄�
   view.setUint16(central+8,0,true);view.setUint32(central+24,FILE_MAX+1,true);
   await assert.rejects(()=>extractZip(new File([encrypted],'bomb.zip'),1024,20));
 });
+
+test('웹 ZIP: 비미디어도 CRC를 검사하고 중첩 ZIP을 재귀 해제하지 않는다',async()=>{
+  const nested=archive({'inner.mp3':mp3});
+  const good=archive({'one.mp3':mp3,'nested.zip':new Uint8Array(await nested.arrayBuffer()),'notes.txt':mp3});
+  const result=await extractZip(good,4096,20);
+  assert.equal(result.files.length,1);assert.deepEqual(result.skipped,['nested.zip','notes.txt']);
+  const raw=new Uint8Array(await archive({'notes.txt':mp3}).arrayBuffer());
+  raw[30+'notes.txt'.length+10]^=1;
+  await assert.rejects(()=>extractZip(new File([raw],'bad.zip'),4096,20),/CRC/);
+});
+test('웹 ZIP: 정규화 중복·빈 구간·제어 문자·디렉터리 별칭을 거부한다',async()=>{
+  for(const names of [['é.mp3','e\u0301.mp3'],['a/','a'],['a//b.mp3'],[' a.mp3'],['a\u2066.mp3']]){
+    const entries=Object.fromEntries(names.map(n=>[n,n.endsWith('/')?new Uint8Array():mp3]));
+    await assert.rejects(()=>extractZip(archive(entries),4096,20));
+  }
+  await assert.rejects(()=>extractZip(archive({}),4096,20));
+});
+test('웹 ZIP: 로컬 파일명·크기 불일치, 링크와 항목 수 초과를 거부한다',async()=>{
+  const raw=new Uint8Array(await archive({'one.mp3':mp3}).arrayBuffer());
+  const c=raw.findIndex((_,i)=>i+4<=raw.length&&new DataView(raw.buffer).getUint32(i,true)===0x02014b50);
+  for(const mutate of [
+    b=>{b[30]=88;},
+    b=>{new DataView(b.buffer).setUint32(22,129,true);},
+    b=>{new DataView(b.buffer).setUint32(c+38,0xa0000000,true);},
+    b=>{new DataView(b.buffer).setUint16(c+8,0x40,true);},
+  ]){
+    const bad=raw.slice();mutate(bad);
+    await assert.rejects(()=>extractZip(new File([bad],'bad.zip'),4096,20));
+  }
+  await assert.rejects(()=>extractZip(archive(Object.fromEntries(Array.from({length:201},(_,i)=>['f'+i+'.txt',new Uint8Array()]))),4096,20));
+});
+test('웹 ZIP: 지원하지 않는 항목도 파일별·전체 해제 크기와 압축률 상한에 포함한다',async()=>{
+  const raw=new Uint8Array(await archive({'notes.txt':mp3}).arrayBuffer());
+  const view=new DataView(raw.buffer);
+  const c=raw.findIndex((_,i)=>i+4<=raw.length&&view.getUint32(i,true)===0x02014b50);
+  view.setUint32(c+24,FILE_MAX+1,true);
+  await assert.rejects(()=>extractZip(new File([raw],'large.zip'),4096,20));
+  await assert.rejects(()=>extractZip(archive({'notes.txt':new Uint8Array(100000)},{level:9}),4096,20),/압축률/);
+});

@@ -76,6 +76,9 @@ pub enum NetError {
     NotFound,
     /// 429
     RateLimited,
+    UploadDailyCountExceeded,
+    UploadDailyBytesExceeded,
+    StorageQuotaExceeded,
     /// 5xx
     ServerError,
     /// 응답이 명세와 다르거나 너무 큼
@@ -99,6 +102,9 @@ impl fmt::Display for NetError {
             Self::UploadExpired => "업로드가 만료되었습니다",
             Self::NotFound => "찾을 수 없습니다",
             Self::RateLimited => "요청이 너무 많습니다. 잠시 후 다시 시도하세요",
+            Self::UploadDailyCountExceeded => "최근 24시간 업로드 건수 한도에 도달했습니다",
+            Self::UploadDailyBytesExceeded => "최근 24시간 업로드 용량 한도를 넘습니다",
+            Self::StorageQuotaExceeded => "보관 및 예약 용량 한도를 넘습니다",
             Self::ServerError => "서버에 문제가 있습니다",
             Self::InvalidResponse => "서버 응답이 올바르지 않습니다",
             Self::InvalidRequest => "요청 값이 올바르지 않습니다",
@@ -184,6 +190,18 @@ pub(crate) fn check_status(status: u16) -> Result<(), NetError> {
         500..=599 => Err(NetError::ServerError),
         // 3xx(리다이렉트는 따라가지 않음), 그 외 4xx 등
         _ => Err(NetError::InvalidResponse),
+    }
+}
+
+// Only recognize bounded, known error codes. Never expose an arbitrary server error body.
+fn rate_limit_error(body: &[u8]) -> NetError {
+    if body.len() > 1024 { return NetError::RateLimited; }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else { return NetError::RateLimited };
+    match value.get("error").and_then(|v| v.as_str()) {
+        Some("upload_daily_count_exceeded") => NetError::UploadDailyCountExceeded,
+        Some("upload_daily_bytes_exceeded") => NetError::UploadDailyBytesExceeded,
+        Some("storage_quota_exceeded") => NetError::StorageQuotaExceeded,
+        _ => NetError::RateLimited,
     }
 }
 
@@ -296,6 +314,46 @@ impl ApiClient {
         Ok(())
     }
 
+    /// Published policy links and version; no credentials are transmitted.
+    pub async fn public_policy(&self) -> Result<String, NetError> {
+        self.request(Method::GET, "/v1/legal", None, Auth::None).await
+    }
+
+    pub async fn sign_in_with_google_policy(&self, id_token: String, version: String) -> Result<(), NetError> {
+        if !is_valid_id_token(&id_token) || version.is_empty() || version.len() > 64 ||
+            !version.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+            return Err(NetError::InvalidRequest);
+        }
+        let body = serde_json::json!({"id_token": id_token, "policy_version": version}).to_string();
+        let response = self.request(Method::POST, "/v1/auth/google", Some(body), Auth::None).await?;
+        let session = parse_session(response)?;
+        self.tokens.save_token(session.access_token)?;
+        Ok(())
+    }
+
+    pub async fn accept_creator_policy(&self, version: String) -> Result<(), NetError> {
+        if version.is_empty() || version.len() > 64 ||
+            !version.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+            return Err(NetError::InvalidRequest);
+        }
+        self.request(Method::POST, "/v1/me/policies/creator",
+            Some(serde_json::json!({"version":version,"accepted":true}).to_string()), Auth::Required).await?;
+        Ok(())
+    }
+
+    /// Fresh Google proof must match the signed-in service account. Does not create a new account.
+    /// "pending" means access has stopped but durable object cleanup has not finished.
+    pub async fn request_account_deletion(&self, id_token: String) -> Result<String, NetError> {
+        if !is_valid_id_token(&id_token) { return Err(NetError::InvalidRequest); }
+        let response = self.request(Method::POST, "/v1/me/deletion",
+            Some(serde_json::json!({"id_token":id_token,"confirm":"DELETE"}).to_string()), Auth::Required).await?;
+        let value: serde_json::Value = serde_json::from_str(&response).map_err(|_| NetError::InvalidResponse)?;
+        let status = value.get("status").and_then(|s| s.as_str()).filter(|s| *s == "pending" || *s == "deleted")
+            .ok_or(NetError::InvalidResponse)?;
+        // Android clears local state after the acknowledged result; keep token if parsing failed.
+        Ok(status.to_owned())
+    }
+
     /// 콘텐츠를 신고한다. (로그인 필요: 토큰이 없으면 요청을 보내지 않고 `Unauthorized`)
     pub async fn report_content(
         &self,
@@ -307,6 +365,27 @@ impl ApiClient {
         self.request(Method::POST, "/v1/reports", Some(report_to_json(&report)), Auth::Required)
             .await?;
         Ok(())
+    }
+
+    pub async fn report_creator(&self, creator_id: String, reason: ReportReason, detail: Option<String>) -> Result<(), NetError> {
+        let report = create_report(creator_id, reason, detail).map_err(|_| NetError::InvalidRequest)?;
+        let mut body: serde_json::Value = serde_json::from_str(&report_to_json(&report)).map_err(|_| NetError::InvalidRequest)?;
+        let fields = body.as_object_mut().ok_or(NetError::InvalidRequest)?;
+        let target = fields.remove("content_id").ok_or(NetError::InvalidRequest)?;
+        fields.insert("creator_id".to_owned(), target);
+        self.request(Method::POST, "/v1/reports", Some(body.to_string()), Auth::Required).await?;
+        Ok(())
+    }
+
+    pub async fn my_reports(&self, cursor: Option<String>) -> Result<String, NetError> {
+        let mut path = "/v1/me/reports?limit=20".to_owned();
+        if let Some(cursor) = cursor {
+            if cursor.len() > 100 || !cursor.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) || cursor.is_empty() {
+                return Err(NetError::InvalidRequest);
+            }
+            path.push_str("&cursor="); path.push_str(&cursor);
+        }
+        self.request(Method::GET, &path, None, Auth::Required).await
     }
 
     /// 크리에이터를 차단한다. (로그인 필요) 차단된 크리에이터의 콘텐츠는 서버가 목록에서 뺀다.
@@ -367,7 +446,7 @@ impl ApiClient {
     /// 로그인 없이도 되는 GET 요청. 저장된 토큰이 있으면 실어 보내지만, 서버가 그 토큰을 거부(401)하면
     /// (만료·폐기된 토큰) [`request`]가 토큰을 지우므로, 로그인 없이 한 번 더 시도한다.
     /// 그래서 오래된 토큰 때문에 누구나 볼 수 있는 목록이 막히는 일이 없다.
-    async fn get_with_optional_login(&self, path: &str) -> Result<String, NetError> {
+    pub(crate) async fn get_with_optional_login(&self, path: &str) -> Result<String, NetError> {
         match self.request(Method::GET, path, None, Auth::Optional).await {
             Err(NetError::Unauthorized) => self.request(Method::GET, path, None, Auth::None).await,
             other => other,
@@ -409,6 +488,17 @@ impl ApiClient {
             // 토큰이 만료·폐기됐다: 더 쓰지 않도록 지운다 (실패해도 요청 결과는 그대로 알린다)
             let _ = self.tokens.clear_token();
         }
+        if status == 429 {
+            if response.content_length().is_some_and(|n| n > 1024) { return Err(NetError::RateLimited); }
+            let mut body = Vec::new();
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) if body.len() + chunk.len() <= 1024 => body.extend_from_slice(&chunk),
+                    Ok(None) => return Err(rate_limit_error(&body)),
+                    _ => return Err(NetError::RateLimited),
+                }
+            }
+        }
         check_status(status)?;
 
         if response.content_length().is_some_and(|n| n > MAX_BODY_BYTES as u64) {
@@ -448,6 +538,24 @@ mod tests {
 
     fn store() -> Arc<FakeStore> {
         Arc::new(FakeStore(Mutex::new(None)))
+    }
+
+    #[test]
+    fn quota_errors_are_bounded_and_allowlisted() {
+        for (code, expected) in [
+            ("upload_daily_count_exceeded", NetError::UploadDailyCountExceeded),
+            ("upload_daily_bytes_exceeded", NetError::UploadDailyBytesExceeded),
+            ("storage_quota_exceeded", NetError::StorageQuotaExceeded),
+            ("limit_reached", NetError::RateLimited),
+            ("private server message", NetError::RateLimited),
+        ] {
+            let body = serde_json::json!({"error": code}).to_string();
+            assert_eq!(rate_limit_error(body.as_bytes()), expected);
+        }
+        for body in [b"not json".to_vec(), b"[]".to_vec(), vec![b' '; 1025],
+            br#"{"error": 123}"#.to_vec()] {
+            assert_eq!(rate_limit_error(&body), NetError::RateLimited);
+        }
     }
 
     #[test]
@@ -608,6 +716,11 @@ mod tests {
                 client.report_content("c_1".into(), ReportReason::Spam, None).await,
                 Err(NetError::Unauthorized)
             );
+            assert_eq!(client.report_creator("creator_01".into(), ReportReason::Spam, None).await, Err(NetError::Unauthorized));
+            assert_eq!(client.report_creator("../other".into(), ReportReason::Spam, None).await, Err(NetError::InvalidRequest));
+            assert_eq!(client.report_creator("creator_01".into(), ReportReason::Other, None).await, Err(NetError::InvalidRequest));
+            assert_eq!(client.my_reports(None).await, Err(NetError::Unauthorized));
+            assert_eq!(client.my_reports(Some("1.r1&user=other".into())).await, Err(NetError::InvalidRequest));
             // 입력 검증이 먼저다
             assert_eq!(client.block_creator("../x".into()).await, Err(NetError::InvalidRequest));
             assert_eq!(

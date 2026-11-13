@@ -217,14 +217,16 @@ internal fun MemoryCard(memory: PlaceMemory,photo: File?,onOpen: () -> Unit) {
 }
 
 @Composable
-fun MemoryDetailScreen(memory: PlaceMemory?,photo: File?,busy: Boolean,error: String?,onBack: () -> Unit,onDelete: () -> Unit) {
+fun MemoryDetailScreen(memory: PlaceMemory?,photo: File?,busy: Boolean,error: String?,onBack: () -> Unit,onDelete: () -> Unit,onShare: ()->Unit = {},onShareVideo: ()->Unit = {}) {
     var confirm by rememberSaveable { mutableStateOf(false) }
+    var sharing by rememberSaveable { mutableStateOf(false) }
     Box(Modifier.fillMaxSize(),contentAlignment=Alignment.TopCenter) {
         LazyColumn(Modifier.widthIn(max=760.dp).fillMaxSize(),contentPadding=PaddingValues(bottom=32.dp)) {
             item {
                 Row(Modifier.fillMaxWidth().padding(8.dp),verticalAlignment=Alignment.CenterVertically) {
                     TextButton(onClick=onBack){Text("뒤로")}
-                    Text("나의 추억",style=MaterialTheme.typography.titleMedium,modifier=Modifier.weight(1f))
+                    Text("Moment",style=MaterialTheme.typography.titleMedium,modifier=Modifier.weight(1f))
+                    if(memory!=null) TextButton(onClick={sharing=true},enabled=!busy){Text("Share")}
                     if(memory!=null) TextButton(onClick={confirm=true},enabled=!busy){Text("삭제")}
                 }
                 InkDivider()
@@ -247,6 +249,12 @@ fun MemoryDetailScreen(memory: PlaceMemory?,photo: File?,busy: Boolean,error: St
             }
         }
     }
+    if(sharing) AlertDialog(onDismissRequest={sharing=false},title={Text("Share")},
+        text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick={sharing=false;onShare()},modifier=Modifier.fillMaxWidth()){Text("Post")}
+            OutlinedButton(onClick={sharing=false;onShareVideo()},modifier=Modifier.fillMaxWidth()){Text("Moment Video")}
+            Text("영상은 편집한 MP4 파일을 선택합니다. 공개 전 검수를 거칩니다.",style=MaterialTheme.typography.bodySmall)
+        }},confirmButton={},dismissButton={TextButton(onClick={sharing=false}){Text("취소")}})
     if(confirm) AlertDialog(onDismissRequest={confirm=false},title={Text("이 추억을 삭제할까요?")},
         text={Text("이 기기에 보관한 사진과 글이 삭제됩니다. 삭제한 추억은 되돌릴 수 없습니다.")},
         confirmButton={TextButton(onClick={confirm=false;onDelete()},enabled=!busy){Text("삭제")}},

@@ -13,6 +13,15 @@ export interface AppEnv {
   API_BASE_URL?: string;
   /** '1'이면 로컬 개발용 가짜 로그인 허용. 배포 환경에서는 설정하지 않는다 */
   DEV_MODE?: string;
+  ENABLE_EXTENDED_FORMATS?: string;
+  UPLOAD_DAILY_COUNT?: string;
+  UPLOAD_DAILY_BYTES?: string;
+  UPLOAD_STORAGE_BYTES?: string;
+  POLICY_VERSION?: string;
+  TERMS_URL?: string;
+  PRIVACY_URL?: string;
+  CREATOR_TERMS_URL?: string;
+  SUPPORT_EMAIL?: string;
 }
 
 export interface UserRow {
@@ -21,4 +30,5 @@ export interface UserRow {
   role: 'user' | 'creator' | 'admin';
   creator_id: string | null;
   created_at: number;
+  deletion_requested_at?: number | null;
 }

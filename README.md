@@ -1,12 +1,18 @@
-# AI & ME · 추억 앨범
+# AI & ME · 오디오 플랫폼
 
-사진·글·오디오·쇼츠를 남기고 감상하는 Android 앱입니다.
-장소와 차량은 추억을 다시 발견하고 감상하는 통로입니다. 차량에서 인기 게시물의 오디오를 추천하는 방향도 유지합니다.
-현재 공개 콘텐츠는 기존 크리에이터 업로드·검수 플랫폼을 이용하고, 새 사진·글 추억은 이 기기의 비공개 앨범에 저장합니다.
-카메라 편집은 **Moment**, 보관함은 **Saved / History**입니다. 보관함의 원형 계정 버튼에서 로그인·프로필·차단 목록·설정을 엽니다. 프로필 이름·사진은 계정별로 이 기기에 저장합니다.
-선택형 ‘꾸며보기’는 외부 AI용 프롬프트 복사와 후보 글 비교를 제공합니다.
-[추억 앨범 구현 범위와 다음 서버 단계](docs/memory-album.md). Android가 우선이고 iOS는 후속입니다.
-화면은 소개 문구 없이 벡터 심볼과 콘텐츠를 중심으로 구성합니다. **피드·지도·+ 창작·구독·보관함**을 사용하며, + 창작은 스트리머 모드를 바로 엽니다.
+이미 만들어진 AI 오디오를 업로드하고, 발견하고, 듣는 Android 앱입니다.
+첫 출시는 **오디오 중심**으로 진행합니다. 피드는 **전체 · 구독**, 크리에이터 모드는 **+ 창작**, 보관함은 **Saved / History**를 중심으로 구성합니다.
+구독은 관심 크리에이터를 따라보는 기능이며 소비자 유료 결제를 뜻하지 않습니다.
+일반 화면은 글자를 최소화하고, 창작에서는 파일·ZIP 확인, 권리 확인, 검수 제출을 상세하게 제공합니다.
+
+위치는 선택적인 오디오 발견 기능입니다. 차량용 먹물 애니메이션은 프로토타입이며 실제 현대차 내비게이션 탑재·차량 GPS 연동은 별도 개발 범위입니다.
+쇼츠·게시글·사진 앨범 관련 기존 코드는 후속 확장을 위해 남아 있지만 현재 기본 공개 서비스는 오디오로 제한합니다.
+프로필·저장 목록·청취 기록의 주요 경로는 기기 내 저장이며 계정 간 자동 동기화는 별도 작업입니다.
+
+**개발 인수인계는 가능하지만 Play 공개 출시 준비가 완료된 상태는 아닙니다.**
+제품 방향, 구현 상태, 회사 소유 유료 클라우드 구성, 남은 백엔드 작업과 전달 절차는
+[동업자 인수인계와 백엔드 개발 계획](android/docs/partner-handoff-and-backend-roadmap.md)을 기준으로 확인하세요.
+[출시 체크리스트](android/docs/google-play-release-readiness.md)에서 후속 작업을 추적합니다.
 
 ## 구조
 
@@ -23,22 +29,27 @@
 
 ## 처음 실행하기
 
-필요한 것: Android Studio, Rust(+ 안드로이드 타깃 3개), `cargo-ndk`, NDK, Python 3, Git for Windows(OpenSSL 포함).
+필요한 것: Android Studio, SDK 37·Android NDK·Gradle 실행 JDK 25, Rust(+ 안드로이드 타깃 3개), `cargo-ndk`, Python 3, Node/npm, Git for Windows(OpenSSL 포함).
+Gradle Wrapper는 9.6.0입니다. 앱 소스의 Java 11 호환 설정과 Gradle 실행 JDK 25는 별개입니다.
 
 ```
 python scripts/build_android.py       # Rust 빌드 + Kotlin 바인딩 생성 (약 30초, 처음엔 몇 분)
 
 cd server
-npm.cmd install                       # 처음 한 번 (PowerShell 실행 정책 때문에 npm 대신 npm.cmd)
-copy .dev.vars.example .dev.vars      # 로컬 설정 (Git에 올라가지 않는다)
-npm.cmd run db:reset                  # 로컬 데이터베이스 생성 + 샘플 데이터
+npm.cmd ci                           # lock 파일 기준 설치 (PowerShell에서는 npm.cmd)
+npm.cmd run types                    # Git에서 제외된 Workers 타입 생성
+copy .dev.vars.example .dev.vars      # 처음만 생성. 기존 설정을 덮어쓰지 않는다
+npm.cmd run db:migrate                # 로컬 개발 DB 마이그레이션
 npm.cmd run dev                       # 서버 실행 (http://127.0.0.1:8787)
 
-python dev-server/tls_proxy.py        # 다른 터미널: 서버에 HTTPS를 입힘 (앱이 https://10.0.2.2:8443 으로 접속). 처음에는 개발용 인증서도 만든다
+python dev-server/tls_proxy.py        # 저장소 루트의 다른 터미널: 서버에 HTTPS를 입힘 (앱이 https://10.0.2.2:8443 으로 접속). 처음에는 개발용 인증서도 만든다
 ```
-그다음 Android Studio에서 ▶ Run.
+TLS 프록시를 먼저 켜 개발 CA가 debug 리소스에 설치된 뒤 Android Studio에서 ▶ Run으로 빌드합니다. CA가 빠진 기존 빌드는 다시 빌드·설치해야 로컬 HTTPS에 연결됩니다.
+`db:reset`은 기존 로컬 데이터를 지우므로 일반 실행 절차에 포함하지 않습니다.
+`10.0.2.2`는 에뮬레이터 개발용 주소입니다. 외부 휴대폰 체험에는 공개 HTTPS 테스트 서버와 해당 주소를 사용하는 빌드가 필요합니다.
 
-서버 시험: `npm.cmd test`(단위 테스트), `npm.cmd run smoke`(서버를 켜 둔 상태에서 API 전체 점검).
+서버 시험: `npm.cmd run check`(타입 검사), `npm.cmd test`(단위 테스트), `npm.cmd run web:test`(브라우저 E2E), `npm.cmd run smoke`(서버를 켜 둔 상태에서 API 전체 점검).
+검증 환경은 Node 24.15.0 / npm 11.12.1입니다. Windows E2E는 설치된 Microsoft Edge를, 다른 OS에서는 Playwright Chromium을 사용합니다. `node:sqlite`와 TypeScript 직접 실행을 지원하는 Node 환경이 필요합니다.
 서버 없이 앱만 볼 때는 `python dev-server/mock_server.py`(가짜 서버, 8443)를 대신 켜도 된다.
 
 **생성 파일(`jniLibs/`, `java/uniffi/`)과 인증서(`dev-server/certs/`)는 Git에 없습니다.** clone한 뒤에는 위 두 명령을 먼저 실행해야 앱이 빌드됩니다.
@@ -59,6 +70,7 @@ cargo test live_mock_server -- --ignored --nocapture      # (서버+tls_proxy �
 - 네트워크는 HTTPS만. Rust에서 reqwest + rustls (OpenSSL 사용 안 함). 리다이렉트는 따라가지 않는다.
 - 로그인 토큰은 Android Keystore에만 저장한다 (Kotlin이 관리, Rust는 콜백으로 요청). 백업에서 제외돼 있다.
 - Kotlin → Rust, **서버 → Rust로 들어오는 모든 값**을 Rust에서 다시 검증한다 (길이, 형식, 범위, https 주소).
+- 직접 작성한 Rust 코드에는 `unsafe` 블록·함수, raw pointer 역참조, `static mut` 접근을 사용하지 않는다. `audio-core/Cargo.toml`의 `unsafe_code = "forbid"`로 라이브러리·CLI·테스트 빌드에서 금지한다. UniFFI 생성 코드와 외부 라이브러리 내부까지 `unsafe`가 없다는 의미는 아니다. [점검 범위와 검증 방법](docs/rust-safety.md).
 - Rust에서 `unwrap()`/`expect()`를 남발하지 않고 오류는 `Result`로 Kotlin에 전달한다. `[profile.release]`에 `panic = "abort"`를 넣지 않는다.
 - 로그에 토큰·개인정보·경로를 남기지 않는다.
 - AI 생성 콘텐츠에는 생성 여부를 표시한다. 사진·글 추억을 자동으로 AI 생성으로 분류하지 않는다. 공개 콘텐츠의 신고·차단 기능이 앱 안에 있다.
@@ -80,11 +92,16 @@ cargo test live_mock_server -- --ignored --nocapture      # (서버+tls_proxy �
 
 ## 지금 상태
 
-완료: 콘텐츠 모델·검증, 서버 응답 검증, HTTPS 요청, Keystore 토큰 보관소, 목록/재생/백그라운드 재생/미니 플레이어, 영상 재생 화면, 신고·차단·차단 관리, 목업 서버, release 빌드 점검. 서버 크리에이터 업로드 API·비공개 R2 저장·승인 CLI도 구현했습니다. [업로드·승인 운영 안내](docs/creator-uploads.md). Android에서는 하단 **+ 창작**의 스트리머 모드로 여러 미디어·ZIP 가져오기, 원본 확인·미리 재생, 정보·권리·선택적 장소 검토, 초안 저장과 검수 제출·반려 후 정보 수정까지 이용합니다. 선택적 **주변 이야기**에서 스마트폰 위치로 승인된 장소 콘텐츠와 캐릭터를 발견하고 기존 플레이어로 감상할 수 있습니다. [위치 동작·검증·연동 범위](docs/nearby-discovery.md). 같은 서버의 `/creator`에서 웹 업로드, `/admin`에서 운영자 검수·크리에이터 권한 관리·심사 이력을 이용합니다. [웹 스튜디오 안내](docs/web-studio.md). 실제 차량 GPS 수신·차량↔스마트폰 전환은 기업의 SDK/API 제공까지 보류합니다.
+앱·웹의 오디오 업로드, 비공개 R2 저장, 승인·반려, 신고·차단·처리 결과, 계정 삭제, 버전별 동의, 업로드 용량 한도와 ZIP 검증을 구현했습니다.
+서버와 웹은 같은 API를 사용합니다. 위치 탐색과 차량용 Ink Studio는 별도 범위로 관리합니다.
+
+이 상태는 로컬 코드와 개발 테스트 기준입니다. 실제 운영 DB·R2·OAuth 연결, 서버의 전체 미디어 디코딩 검사, 관리자 MFA, 운영 경보·복구와 서명된 출시 AAB 검증이 남았습니다.
+최신 변경에는 미커밋 파일이 있으므로 GitHub 주소만 전달하기 전에 인수인계 버전을 고정해야 합니다.
+자세한 구현 범위와 검증 이력은 [인수인계 문서](android/docs/partner-handoff-and-backend-roadmap.md)를 참고하세요.
 
 ## 정해진 것
 
-- **서버:** 구독형 클라우드, Cloudflare(Workers + D1 + R2) 구성. 이유와 업로드 흐름은 `docs/server-plan.md`. 서버는 `docs/api-v1.md`를 구현한 얇은 층이라 나중에 옮겨도 앱은 바뀌지 않는다.
+- **서버:** 현재 구현은 Cloudflare Workers + D1 + 비공개 R2. 회사 소유 유료 계정으로 운영하는 안을 권장합니다. 기본 구독료와 사용량 과금, Enterprise 계약을 구분합니다. API 계약을 유지하면 앱 변경을 줄일 수 있지만 DB·저장소·작업의 공급자 이전은 별도 개발입니다. [운영안과 구현 순서](android/docs/partner-handoff-and-backend-roadmap.md).
 - **로그인:** Google. 목록·재생은 로그인 없이, 신고·차단·업로드는 로그인 필요.
 - **업로드:** 승인된 크리에이터만, **앱과 웹 모두**에서 (같은 API). 업로드한 콘텐츠는 검수 뒤에 공개.
 
@@ -92,5 +109,7 @@ cargo test live_mock_server -- --ignored --nocapture      # (서버+tls_proxy �
 
 - **Google 클라이언트 ID 만들기** → `docs/google-signin-setup.md` (웹 클라이언트 ID를 알려주면 앱·서버에 연결). 앱의 로그인 화면은 이게 있어야 시작할 수 있다 (debug 빌드는 목업 서버용 가짜 로그인만 사용).
 - **Cloudflare 계정 만들기**, 서비스 이름·도메인 정하기 → `docs/server-plan.md`
-- **토큰 갱신(`refresh_token`), 계정 삭제 API:** 서버가 정해지면 추가. (Google Play는 계정 생성이 있는 앱에 앱 안/웹의 계정 삭제 경로를 요구한다.)
+- **계정·세션 운영:** 앱/웹 계정 삭제와 서버 정리·재시도 코드는 구현했습니다. 실제 정책·보존 기간·운영 삭제 검증, 세션 만료·무효화 운영은 별도로 확정해야 합니다.
+- **서버 운영 보완:** 격리된 미디어 검사 작업, 전체 요청 제한, 관리자 MFA, 경보·백업·복원 검증.
+- **출시 산출물:** 운영 주소와 실제 로그인, 업로드 키, 서명 AAB, 네이티브 16KB 호환성·실기기·Play 테스트 검증.
 - **법규:** 신고 처리, 저작권 침해 대응, 개인정보 처리방침, Play Console의 데이터 보안·AI 생성 콘텐츠 선언은 서비스 시작 전에 따로 확인.

@@ -18,7 +18,7 @@ import com.kimyubin33.audioapp.ui.theme.AudioAppTheme
 
 /** 콘텐츠 형식은 피드 안에서 고르고, 장소와 작성에는 각자의 입구를 둔다. */
 enum class MainTab(val label: String) {
-    Feed("피드"), Places("지도"), Create("창작"), Subscriptions("구독"), Library("보관함")
+    Feed("피드"), Places("Drive"), Create("창작"), Subscriptions("구독"), Library("보관함")
 }
 
 @Composable
@@ -26,7 +26,7 @@ fun BottomNav(selected: MainTab, onSelect: (MainTab) -> Unit, modifier: Modifier
     Column(modifier.fillMaxWidth().background(MaterialTheme.colorScheme.background)) {
         InkDivider()
         Row(Modifier.fillMaxWidth().heightIn(min=80.dp).selectableGroup(),verticalAlignment=Alignment.CenterVertically) {
-            MainTab.entries.forEach { tab ->
+            listOf(MainTab.Feed, MainTab.Places, MainTab.Create, MainTab.Library).forEach { tab ->
                 val active = tab == selected
                 val color = if(active) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
                 Column(

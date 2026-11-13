@@ -28,4 +28,4 @@ binding = "MEDIA"
 bucket_name = "audioapp-media"
 
 [triggers]
-crons = ["17 * * * *"] # 만료 후 1시간 지난 미완료 업로드 정리
+crons = ["17 * * * *"] # 계정 삭제 재시도 및 만료 후 1시간 지난 미완료 업로드 정리

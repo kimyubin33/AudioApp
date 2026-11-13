@@ -4,18 +4,24 @@
 
 import { TOKEN_TTL_SECONDS, issueToken } from './auth';
 import { googleUser } from './accounts';
+import { createReport,listReports,reportDetail,reviewReport } from './reports';
+import { extendedFormats } from './features';
+import { requestAccountDeletion, processAccountDeletions } from './account-deletion';
+import { publicPolicy, acceptCreatorPolicy } from './legal';
 import { adminContents, adminDetail, reviewContent, adminUser, creatorAccess } from './admin';
 import { webAsset, webConfig, webSession } from './web';
 import { BASE_HEADERS, HttpError, apiBase, authenticate, json, newId, noContent, nowSeconds, readJson, requireUser } from './http';
 import { completeUpload, createUpload, putUpload, listMyContents, serveMedia, cleanupUploads } from './uploads';
 import { creatorProfile, uploadStatus, cancelUpload, editCreatorContent } from './creator';
 import { nearbyContents } from './nearby';
+import { createPost } from './posts';
 import type { AppEnv } from './types';
 import {
   DETAIL_MAX,
   cleanMultiline,
   cleanText,
   isContentKind,
+  isShortStyle,
   isReportReason,
   isSafeHttpsUrl,
   isValidCursor,
@@ -33,6 +39,8 @@ interface ContentRow {
   creator_id: string;
   title: string;
   kind: string;
+  short_style: string | null;
+  submission_json: string | null;
   duration_seconds: number;
   ai_generated: number;
   ai_tool: string | null;
@@ -41,6 +49,9 @@ interface ContentRow {
   external_url?: string | null;
 }
 
+function publicSubmission(r: ContentRow): Record<string,any> {
+  try { const s=JSON.parse(r.submission_json??'null'); return s&&typeof s==='object'&&!Array.isArray(s)?s:{}; } catch { return {}; }
+}
 const toSummary = (r: ContentRow) => ({
   id: r.id,
   title: r.title,
@@ -49,6 +60,9 @@ const toSummary = (r: ContentRow) => ({
   duration_seconds: r.duration_seconds,
   ai_generated: r.ai_generated === 1,
   ai_tool: r.ai_tool,
+  short_style: r.short_style ?? null,
+  post_excerpt: r.kind==='post' ? Array.from(String(publicSubmission(r).description??'')).slice(0,180).join('') : null,
+  has_image: r.kind==='post' && !!r.object_key,
 });
 
 function streamUrl(request: Request, env: AppEnv, r: ContentRow): string | null {
@@ -76,6 +90,8 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
   // 종류(오디오/숏폼 영상) 필터와 구독 필터. 구독 필터는 로그인이 필요하다.
   const kind = params.get('kind');
   if (kind !== null && !isContentKind(kind)) throw new HttpError(400, 'invalid_request');
+  const shortStyle = params.get('short_style');
+  if (shortStyle!==null && (kind!=='short_video'||!isShortStyle(shortStyle))) throw new HttpError(400,'invalid_request');
   const subscribedRaw = params.get('subscribed');
   if (subscribedRaw !== null && subscribedRaw !== '1') throw new HttpError(400, 'invalid_request');
   const subscribedOnly = subscribedRaw === '1';
@@ -83,6 +99,7 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
 
   // 공개(approved)된 것만. 로그인한 사용자가 차단한 크리에이터의 콘텐츠는 뺀다.
   const where = ["c.status = 'approved'"];
+  if (!extendedFormats(env)) where.push("c.kind = 'audio'");
   const binds: (string | number)[] = [];
   const query = params.get('q');
   if (query !== null) {
@@ -101,6 +118,7 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
     where.push('c.kind = ?');
     binds.push(kind);
   }
+  if (shortStyle!==null) { where.push('c.short_style = ?'); binds.push(shortStyle); }
   if (subscribedOnly && user) {
     where.push('EXISTS (SELECT 1 FROM subscriptions s WHERE s.user_id = ? AND s.creator_id = c.creator_id)');
     binds.push(user.id);
@@ -116,7 +134,7 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
   binds.push(limit + 1);
 
   const { results } = await env.DB.prepare(
-    `SELECT c.id, c.creator_id, c.title, c.kind, c.duration_seconds, c.ai_generated, c.ai_tool, c.created_at
+    `SELECT c.id, c.creator_id, c.title, c.kind, c.duration_seconds, c.ai_generated, c.ai_tool, c.created_at, c.short_style, c.submission_json, c.object_key
        FROM contents c WHERE ${where.join(' AND ')}
       ORDER BY c.created_at DESC, c.id DESC LIMIT ?`,
   )
@@ -133,18 +151,30 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
 }
 
 async function contentDetail(id: string, request: Request, env: AppEnv): Promise<Response> {
-  await authenticate(request, env); // 토큰이 있으면 유효해야 한다
+  const user = await authenticate(request, env); // 토큰이 있으면 유효해야 한다
   if (!isValidId(id)) throw new HttpError(400, 'invalid_request');
   const row = await env.DB.prepare(
-    `SELECT id, creator_id, title, kind, duration_seconds, ai_generated, ai_tool, created_at, object_key, external_url
-       FROM contents WHERE id = ?1 AND status = 'approved'`,
+    `SELECT id, creator_id, title, kind, duration_seconds, ai_generated, ai_tool, created_at, object_key, external_url, short_style, submission_json
+       FROM contents WHERE id = ?1 AND status = 'approved'
+       AND (?2 IS NULL OR NOT EXISTS(SELECT 1 FROM blocks b WHERE b.user_id=?2 AND b.creator_id=contents.creator_id))`,
   )
-    .bind(id)
+    .bind(id,user?.id??null)
     .first<ContentRow>();
-  if (!row) throw new HttpError(404, 'not_found');
+  if (!row || (!extendedFormats(env) && row.kind !== 'audio')) throw new HttpError(404, 'not_found');
   const url = streamUrl(request, env, row);
-  if (!url) throw new HttpError(404, 'not_found'); // 재생 주소가 없거나 안전하지 않으면 내보내지 않는다
-  return json(200, { ...toSummary(row), stream_url: url });
+  if (row.kind!=='post'&&!url) throw new HttpError(404, 'not_found');
+  const submission = publicSubmission(row);
+  let audioId: string | null = null;
+  if (row.kind==='post'&&isValidId(submission.audio_content_id)) {
+    const audio=await env.DB.prepare(`SELECT id FROM contents c WHERE id=? AND kind='audio' AND status='approved'
+      AND (? IS NULL OR NOT EXISTS(SELECT 1 FROM blocks b WHERE b.user_id=? AND b.creator_id=c.creator_id))`)
+      .bind(submission.audio_content_id,user?.id??null,user?.id??null).first<{id:string}>();
+    audioId=audio?.id??null;
+  }
+  return json(200, { ...toSummary(row), stream_url: row.kind==='post'?null:url,
+    body: row.kind==='post'?submission.description??'':null,
+    place_name: row.kind==='post'?submission.location?.name??null:null,
+    audio_content_id: audioId });
 }
 
 // ───────────────────────── 구독 ─────────────────────────
@@ -186,35 +216,6 @@ async function signInWithGoogle(request: Request, env: AppEnv): Promise<Response
 
 // ───────────────────────── 신고 ─────────────────────────
 
-async function createReport(request: Request, env: AppEnv): Promise<Response> {
-  const user = await requireUser(request, env);
-  const body = await readJson(request);
-
-  const contentId = body.content_id;
-  const reason = body.reason;
-  if (!isValidId(contentId) || !isReportReason(reason)) throw new HttpError(400, 'invalid_request');
-
-  // 설명: 없음/null/공백뿐이면 없는 것으로 본다
-  let detail: string | null = null;
-  if (body.detail !== undefined && body.detail !== null) {
-    if (typeof body.detail !== 'string') throw new HttpError(400, 'invalid_request');
-    if (body.detail.trim() !== '') {
-      detail = cleanMultiline(body.detail, DETAIL_MAX);
-      if (detail === null) throw new HttpError(400, 'invalid_request');
-    }
-  }
-  if (reason === 'other' && detail === null) throw new HttpError(400, 'invalid_request');
-
-  const exists = await env.DB.prepare('SELECT 1 AS ok FROM contents WHERE id = ?1').bind(contentId).first();
-  if (!exists) throw new HttpError(404, 'not_found');
-
-  // 같은 사람이 같은 콘텐츠를 여러 번 신고해도 한 건으로 센다
-  await env.DB.prepare('INSERT OR IGNORE INTO reports (id, reporter_user_id, content_id, reason, detail, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)')
-    .bind(newId('r'), user.id, contentId, reason, detail, nowSeconds())
-    .run();
-  return noContent();
-}
-
 // ───────────────────────── 차단 ─────────────────────────
 
 async function blockCreator(creatorId: string, request: Request, env: AppEnv): Promise<Response> {
@@ -250,8 +251,17 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
   const method = request.method;
 
   if (pathname === '/healthz' && method === 'GET') return json(200, { ok: true });
+  if (pathname === '/v1/legal' && method === 'GET') return publicPolicy(env);
+  if (pathname === '/v1/me/policies/creator' && method === 'POST') return acceptCreatorPolicy(request,env);
+  if (pathname === '/v1/me/deletion' && method === 'POST') return requestAccountDeletion(request,env);
+  if (pathname === '/v1/web/account-deletion' && method === 'POST') return requestAccountDeletion(request,env,true);
   if (pathname === '/v1/web/config' && method === 'GET') return webConfig(request, env);
   if (pathname === '/v1/web/session' && ['GET','POST','DELETE'].includes(method)) return webSession(request, env);
+  if (pathname === '/v1/me/reports' && method === 'GET') return listReports(request,env);
+  if (pathname === '/v1/admin/reports' && method === 'GET') return listReports(request,env,true);
+  const reportRoute = /^\/v1\/admin\/reports\/([^/]+)(\/review)?$/.exec(pathname);
+  if (reportRoute && method === 'GET' && !reportRoute[2]) return reportDetail(reportRoute[1],request,env);
+  if (reportRoute && method === 'POST' && reportRoute[2]) return reviewReport(reportRoute[1],request,env);
   if (pathname === '/v1/admin/contents' && method === 'GET') return adminContents(request, env);
   if (pathname === '/v1/admin/user' && method === 'GET') return adminUser(request, env);
   const review = /^\/v1\/admin\/contents\/([^/]+)(\/review)?$/.exec(pathname);
@@ -260,6 +270,7 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
   const access = /^\/v1\/admin\/creators\/([^/]+)$/.exec(pathname);
   if (access && method === 'POST') return creatorAccess(access[1],request,env);
 
+  if (pathname === '/v1/me/posts' && method === 'POST') return createPost(request,env);
   if (pathname === '/v1/me' && method === 'GET') return creatorProfile(request, env);
   const status = /^\/v1\/uploads\/([^/]+)$/.exec(pathname);
   if (status && method === 'GET') return uploadStatus(status[1], request, env);
@@ -299,6 +310,7 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
 
 export default {
   async scheduled(_event: ScheduledController, env: AppEnv): Promise<void> {
+    await processAccountDeletions(env);
     await cleanupUploads(env);
   },
   async fetch(request: Request, env: AppEnv): Promise<Response> {

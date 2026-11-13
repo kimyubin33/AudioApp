@@ -13,3 +13,7 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# 로컬 자동 점검, 화면 녹화 및 시뮬레이터 출력 (소스 인수인계에 포함하지 않음)
+/.scratch/
+/artifacts/
