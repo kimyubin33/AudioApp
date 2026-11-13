@@ -71,7 +71,7 @@ function readMedia(file:File,signal?:AbortSignal):Promise<{duration:number;width
   const timer=setTimeout(()=>finish(new Error('미디어 정보를 읽는 시간이 초과되었습니다.')),20_000);
   function finish(error?:Error){clearTimeout(timer);signal?.removeEventListener('abort',abort);media.onerror=null;media.onloadedmetadata=null;media.removeAttribute('src');media.load();URL.revokeObjectURL(url);if(error)reject(error);}
   media.preload='metadata';media.onloadedmetadata=()=>{const duration=Math.ceil(media.duration),video=media as HTMLVideoElement;
-   if(!Number.isFinite(duration)||duration<1||duration>(file.type==='video/mp4'?180:14400)){finish(new Error('오디오는 4시간, 쇼츠는 3분 이내여야 합니다.'));return;}
+   if(!Number.isFinite(duration)||duration<1||duration>(file.type==='video/mp4'?180:1200)){finish(new Error('오디오는 20분, 쇼츠는 3분 이내여야 합니다.'));return;}
    if(file.type==='video/mp4'&&(video.videoWidth<1||video.videoHeight<1)){finish(new Error('MP4 쇼츠에는 영상 트랙이 필요합니다. 오디오 파일은 M4A로 선택해 주세요.'));return;}
    if(file.type!=='video/mp4'&&(video.videoWidth>0||video.videoHeight>0)){finish(new Error('오디오 파일에 영상 트랙이 포함되어 있습니다. 오디오만 내보낸 파일을 선택해 주세요.'));return;}
    const result={duration,width:video.videoWidth??0,height:video.videoHeight??0};finish();resolve(result);};

@@ -122,11 +122,12 @@ test('인증·소유권·권한 회수는 모든 업로드 단계에 적용', as
 test('메타데이터, MIME, 크기, 토큰, 만료 검증', async () => {
   for (const bad of [
     { title: '' }, { title: '가'.repeat(101) }, { title: 'a\nb' }, { kind: 'podcast' },
-    { duration_seconds: 0 }, { duration_seconds: 1.5 }, { duration_seconds: 14401 },
+    { duration_seconds: 0 }, { duration_seconds: 1.5 }, { duration_seconds: 1201 },
     { ai_generated: 'true' }, { ai_generated: false }, { ai_tool: '' },
     { kind: 'audio', content_type: 'video/mp4' }, { kind: 'short_video', content_type: 'audio/mp4' },
     { kind: 'short_video', content_type: 'video/mp4', duration_seconds: 181 }, { content_type: 'text/html' },
   ]) assert.equal((await call('POST', '/v1/uploads', { body: { ...metadata, ...bad } })).status, 400, JSON.stringify(bad));
+  await create({ ...metadata, duration_seconds: 1200 }); // 오디오 최대 20분 경계
   const u = await create();
   const wrong = new URL(u.upload_url); wrong.searchParams.set('token', '0'.repeat(64));
   assert.equal((await put({ ...u, upload_url: wrong.href })).status, 403);

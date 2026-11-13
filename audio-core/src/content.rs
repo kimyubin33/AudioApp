@@ -7,7 +7,7 @@ use crate::validation::{is_clean_text, is_valid_id};
 
 const TITLE_MAX_CHARS: usize = 100;
 const AI_TOOL_MAX_CHARS: usize = 50;
-const AUDIO_MAX_SECONDS: u32 = 4 * 60 * 60; // 4시간
+const AUDIO_MAX_SECONDS: u32 = 20 * 60; // 20분
 const VIDEO_MAX_SECONDS: u32 = 180; // 3분
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -150,7 +150,9 @@ mod tests {
 
     #[test]
     fn duration_limits_depend_on_kind() {
-        assert!(create_content("t".into(), "a".into(), ContentKind::Audio, 3600, true, None).is_ok());
+        assert!(create_content("t".into(), "a".into(), ContentKind::Audio, 1200, true, None).is_ok());
+        let e = create_content("t".into(), "a".into(), ContentKind::Audio, 1201, true, None);
+        assert_eq!(e, Err(ContentError::InvalidDuration));
         let e = create_content("t".into(), "a".into(), ContentKind::ShortVideo, 181, true, None);
         assert_eq!(e, Err(ContentError::InvalidDuration));
         let e = create_content("t".into(), "a".into(), ContentKind::Audio, 0, true, None);
