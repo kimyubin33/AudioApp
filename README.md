@@ -96,7 +96,7 @@ cargo test live_mock_server -- --ignored --nocapture      # (서버+tls_proxy �
 서버와 웹은 같은 API를 사용합니다. 위치 탐색과 차량용 Ink Studio는 별도 범위로 관리합니다.
 
 이 상태는 로컬 코드와 개발 테스트 기준입니다. 실제 운영 DB·R2·OAuth 연결, 서버의 전체 미디어 디코딩 검사, 관리자 MFA, 운영 경보·복구와 서명된 출시 AAB 검증이 남았습니다.
-최신 변경에는 미커밋 파일이 있으므로 GitHub 주소만 전달하기 전에 인수인계 버전을 고정해야 합니다.
+2026-11-13에 최신 앱·Rust·서버·테스트·마이그레이션·문서 113개 파일을 `ae1f74d91e554625f54113c9cd5338a266f17818`로 커밋하고 GitHub `main`에 푸시했습니다. 원격 해시 일치 확인과 이번 검증 내역은 [GitHub 동기화 기록](android/docs/github-sync-status.md)에 남겼습니다. 이후 문서 정리 커밋은 이 구현 커밋 위에 이어집니다.
 자세한 구현 범위와 검증 이력은 [인수인계 문서](android/docs/partner-handoff-and-backend-roadmap.md)를 참고하세요.
 
 ## 정해진 것
