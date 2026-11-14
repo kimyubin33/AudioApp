@@ -3,6 +3,7 @@ import { createTestHarness } from 'wrangler';
 import { issueToken } from '../src/auth.ts';
 import { zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 const secret='browser-integration-secret-not-a-real-service-secret';
 const server=createTestHarness({workers:[{configPath:'./wrangler.toml',secrets:{
  TOKEN_SECRET:secret,GOOGLE_CLIENT_ID:'',DEV_MODE:'1',ENABLE_EXTENDED_FORMATS:'1',API_BASE_URL:'https://unused-app-origin.test'}}]});
@@ -18,18 +19,8 @@ async function signContext(browser,id){
  const context=await browser.newContext();await context.addCookies([{name:'audio_dev_session',value:await issueToken({TOKEN_SECRET:secret},id),
   url:base,httpOnly:true,sameSite:'Strict',secure:false}]);return context;
 }
-async function makeAudio(page,frequency=440){
- return Buffer.from(await page.evaluate(async frequency=>{
-  const mime=['audio/mp4;codecs=mp4a.40.2','audio/mp4'].find(m=>MediaRecorder.isTypeSupported(m));
-  if(!mime)throw new Error('이 테스트 브라우저는 AAC MP4 기록을 지원해야 합니다.');
-  const context=new AudioContext(),destination=context.createMediaStreamDestination(),tone=context.createOscillator(),gain=context.createGain();
-  tone.frequency.value=frequency;gain.gain.value=.02;tone.connect(gain);gain.connect(destination);
-  await context.resume();const recorder=new MediaRecorder(destination.stream,{mimeType:mime,audioBitsPerSecond:96000}),chunks=[];
-  const completed=new Promise(resolve=>{recorder.ondataavailable=e=>chunks.push(e.data);recorder.onstop=resolve;});
-  recorder.start();tone.start();await new Promise(resolve=>setTimeout(resolve,1100));tone.stop();recorder.stop();await completed;await context.close();
-  return Array.from(new Uint8Array(await new Blob(chunks,{type:mime}).arrayBuffer()));
- },frequency));
-}
+// 브라우저 녹음(MediaRecorder)은 환경에 따라 0바이트가 되므로 미리 생성한 작은 미디어를 쓴다. 생성 방법: e2e/fixtures/README.md
+const fixture=name=>readFileSync(new URL('./fixtures/'+name,import.meta.url));
 async function playAndConfirm(page,admin=false){
  const media=page.locator('audio').last();await expect(media).toBeVisible();
  await media.evaluate(async e=>{await e.play();});
@@ -44,7 +35,7 @@ test('여러 ZIP 검증·초안 복원 → 비공개 제출 → 버전 충돌 �
  const owner=await signContext(browser,'web_owner'),admin=await signContext(browser,'web_admin');
  try{
  const page=await owner.newPage();page.on('dialog',d=>d.accept());await page.goto(base+'/creator');
- const audio=await makeAudio(page),second=await makeAudio(page,880);
+ const audio=fixture('tone-440.m4a'),second=fixture('tone-880.m4a');
  const zip=(name,entries)=>({name,mimeType:'application/zip',buffer:Buffer.from(zipSync(entries,{level:0}))});
  await page.locator('input[type=file]').setInputFiles([
   zip('one.zip',{'folder/first.m4a':audio}),zip('two.zip',{'second.m4a':second}),zip('unsafe.zip',{'../bad.m4a':audio})]);
@@ -53,7 +44,7 @@ test('여러 ZIP 검증·초안 복원 → 비공개 제출 → 버전 충돌 �
  await expect(page.locator('#notice')).toContainText('경로');
  await page.reload();await expect(page.getByRole('button',{name:'first',exact:true})).toBeVisible();
  await playAndConfirm(page);const previousPreview=await page.locator('audio').elementHandle();await step(page,'2. 작품 정보');
- expect(await previousPreview.evaluate(media=>media.paused)).toBe(true);
+ await expect.poll(()=>previousPreview.evaluate(media=>media.paused)).toBe(true);
  await page.getByLabel('작품 제목',{exact:true}).fill('브라우저에서 올린 AI 오디오');
  await page.getByLabel('사용한 AI 도구',{exact:true}).fill('테스트 합성 도구');
  await page.getByLabel('작품 설명',{exact:true}).fill('완성한 AI 오디오 공유 테스트');
@@ -124,7 +115,7 @@ test('파일 검사 중지는 현재 묶음을 폐기하고 저장한 초안을 
  const context=await signContext(browser,'web_owner');
  try{
   const page=await context.newPage();await page.goto(base+'/creator');
-  const first=await makeAudio(page),second=await makeAudio(page,880);
+  const first=fixture('tone-440.m4a'),second=fixture('tone-880.m4a');
   await page.locator('input[type=file]').setInputFiles({name:'kept.m4a',mimeType:'audio/mp4',buffer:first});
   await expect(page.getByRole('button',{name:'kept',exact:true})).toBeVisible();
   let release;const gate=new Promise(resolve=>{release=resolve;});
@@ -146,7 +137,7 @@ test('파일 검사 중지는 현재 묶음을 폐기하고 저장한 초안을 
 test('초안 저장은 다른 탭의 최신 버전을 덮어쓰지 않는다',async({browser})=>{
  const context=await signContext(browser,'web_owner');try{
   const first=await context.newPage();first.on('dialog',d=>d.accept());await first.goto(base+'/creator');
-  const audio=await makeAudio(first);await first.locator('input[type=file]').setInputFiles({name:'conflict.m4a',mimeType:'audio/mp4',buffer:audio});
+  const audio=fixture('tone-440.m4a');await first.locator('input[type=file]').setInputFiles({name:'conflict.m4a',mimeType:'audio/mp4',buffer:audio});
   await expect(first.getByRole('button',{name:'conflict',exact:true})).toBeVisible({timeout:30_000});await step(first,'2. 작품 정보');
   const second=await context.newPage();second.on('dialog',d=>d.accept());await second.goto(base+'/creator');await step(second,'2. 작품 정보');
   await second.getByLabel('작품 제목',{exact:true}).fill('다른 탭의 최신 제목');await expect(second.locator('#save-status')).toContainText('저장됨');
@@ -157,21 +148,8 @@ test('초안 저장은 다른 탭의 최신 버전을 덮어쓰지 않는다',as
 test('AI 쇼츠는 실제 영상 트랙·해상도·미리 재생을 확인하고 비공개 R2로 제출한다',async({browser},testInfo)=>{
  const context=await signContext(browser,'web_owner');try{
   const page=await context.newPage();page.on('dialog',d=>d.accept());await page.goto(base+'/creator');
-  const fakeVideo=await makeAudio(page);
-  const video=Buffer.from(await page.evaluate(async()=>{
-   const mime=['video/mp4;codecs=avc1.42001E,mp4a.40.2','video/mp4'].find(m=>MediaRecorder.isTypeSupported(m));
-   if(!mime)throw new Error('이 테스트 브라우저는 H.264/AAC MP4 기록을 지원해야 합니다.');
-   const canvas=document.createElement('canvas');canvas.width=320;canvas.height=480;const paint=canvas.getContext('2d');
-   paint.fillStyle='#fafaf7';paint.fillRect(0,0,320,480);
-   const audio=new AudioContext(),destination=audio.createMediaStreamDestination(),tone=audio.createOscillator(),gain=audio.createGain();
-   gain.gain.value=.01;tone.connect(gain);gain.connect(destination);await audio.resume();
-   const stream=canvas.captureStream(12);stream.addTrack(destination.stream.getAudioTracks()[0]);
-   const recorder=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:200000}),chunks=[];
-   const completed=new Promise(resolve=>{recorder.ondataavailable=e=>chunks.push(e.data);recorder.onstop=resolve;});
-   let frame=0;const draw=setInterval(()=>{paint.fillStyle='#fafaf7';paint.fillRect(0,0,320,480);paint.fillStyle='#181816';paint.fillRect(50+(frame++%20)*5,200,40,40);},80);
-   recorder.start();tone.start();await new Promise(resolve=>setTimeout(resolve,1100));tone.stop();recorder.stop();await completed;clearInterval(draw);stream.getTracks().forEach(t=>t.stop());await audio.close();
-   return Array.from(new Uint8Array(await new Blob(chunks,{type:mime}).arrayBuffer()));
-  }));
+  const fakeVideo=fixture('tone-440.m4a');
+  const video=fixture('short-1s.mp4'); // 320×480 H.264 + AAC. 위장 파일(disguised.m4a)과 실제 쇼츠 양쪽에 쓴다.
   await page.locator('input[type=file]').setInputFiles({name:'disguised.m4a',mimeType:'audio/mp4',buffer:video});
   await expect(page.locator('#notice')).toContainText('오디오 파일에 영상 트랙');
   await expect(page.getByRole('button',{name:'disguised',exact:true})).toHaveCount(0);
