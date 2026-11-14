@@ -13,7 +13,7 @@ beforeEach(async()=>{
  for(const [id,role,creator]of [['owner','creator','creator_one'],['viewer','user',null],['other','user',null],['admin','admin',null]])
   await env.DB.prepare('INSERT INTO users(id,google_sub,role,creator_id,created_at) VALUES(?,?,?,?,1)').bind(id,id,role,creator).run();
  for(const [id,kind]of [['audio','audio'],['short','short_video']])
-  await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,external_url,created_at) VALUES(?,'creator_one',?,?,10,1,'approved','https://media.test/sample',1)").bind(id,id,kind).run();
+  await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,validation_status,external_url,created_at) VALUES(?,'creator_one',?,?,10,1,'approved','passed','https://media.test/sample',1)").bind(id,id,kind).run();
 });
 async function call(method,path,{as='viewer',body}={}){
  return worker.fetch('https://api.test'+path,{method,headers:{...(as?{Authorization:'Bearer '+tokens[as]}:{}),...(body!==undefined?{'Content-Type':'application/json'}:{})},body:body===undefined?undefined:JSON.stringify(body)});
@@ -79,7 +79,7 @@ test('신고 대상·사유·설명 검증 및 중복 방지, 새 신고 일일 
  assert.equal((await call('POST','/v1/reports',{body:{content_id:'missing',reason:'spam'}})).status,404);
  await report();await report();
  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM reports').first()).n,1);
- for(let i=0;i<20;i++)await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,external_url,created_at) VALUES(?,'creator_one','test','audio',1,0,'approved','https://media.test/a',1)").bind('a'+i).run();
+ for(let i=0;i<20;i++)await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,validation_status,external_url,created_at) VALUES(?,'creator_one','test','audio',1,0,'approved','passed','https://media.test/a',1)").bind('a'+i).run();
  const results=await Promise.all(Array.from({length:20},(_,i)=>call('POST','/v1/reports',{body:{content_id:'a'+i,reason:'spam'}})));
  assert.equal(results.filter(r=>r.status===204).length,19);
  assert.equal(results.filter(r=>r.status===429).length,1);

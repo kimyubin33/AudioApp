@@ -95,7 +95,7 @@ test('탈퇴는 다른 로그인 계정과 미가입 Google 계정으로 대신�
 });
 test('탈퇴 접수 즉시 공개 콘텐츠·기존 토큰·재가입·추가 제출을 차단하고 중복 접수는 안전하다', async () => {
   const row = await uploaded();
-  await env.DB.prepare("UPDATE contents SET status='approved' WHERE id=?").bind(row.content_id).run();
+  await env.DB.prepare("UPDATE contents SET validation_status='passed',status='approved' WHERE id=?").bind(row.content_id).run();
   for (let i = 0; i < 2; i++) {
     const response = await call('/v1/me/deletion', deletion);
     assert.equal(response.status, 202);

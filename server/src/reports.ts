@@ -14,7 +14,7 @@ export async function createReport(request:Request,env:AppEnv):Promise<Response>
  }
  if(body.reason==='other'&&!detail)throw new HttpError(400,'invalid_request');
  const exists=content
-  ?await env.DB.prepare("SELECT 1 FROM contents WHERE id=? AND status='approved'").bind(content).first()
+  ?await env.DB.prepare("SELECT 1 FROM contents WHERE id=? AND status='approved' AND validation_status='passed'").bind(content).first()
   :await env.DB.prepare("SELECT 1 FROM users WHERE creator_id=? AND id!=? AND deletion_requested_at IS NULL").bind(creator,user.id).first();
  if(!exists)throw new HttpError(404,'not_found');
  const prior=await env.DB.prepare('SELECT id FROM reports WHERE reporter_user_id=? AND content_id IS ? AND creator_id IS ?')

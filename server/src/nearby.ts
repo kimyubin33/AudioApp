@@ -14,7 +14,7 @@ export async function nearbyContents(request: Request, env: AppEnv): Promise<Res
   }
   const lat = latitude as number, lon = longitude as number, meters = radius as number;
   const box = boundingBox(lat, lon, meters);
-  const where = ["c.status = 'approved'", 'c.place_latitude BETWEEN ? AND ?', 'c.place_longitude BETWEEN -180 AND 180'];
+  const where = ["c.status = 'approved'", "c.validation_status = 'passed'", 'c.place_latitude BETWEEN ? AND ?', 'c.place_longitude BETWEEN -180 AND 180'];
   const binds: (string | number)[] = [box.minLat, box.maxLat];
   if (!extendedFormats(env)) where.push("c.kind = 'audio'");
   if (box.minLon <= box.maxLon) {

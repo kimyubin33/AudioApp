@@ -30,6 +30,11 @@ try {
   throw e;
 }
 
+if (remote && plan.localOnly) {
+  console.error('로컬 개발 DB 전용 명령입니다. --remote 로는 실행할 수 없습니다.');
+  process.exit(2);
+}
+
 if (remote && plan.write && !yes) {
   console.error('실제 서비스 DB의 데이터를 바꾸는 명령입니다. 확인했다면 --yes 를 붙여 다시 실행하세요.');
   process.exit(2);
@@ -50,7 +55,8 @@ try {
 } catch (e) {
   const text = `${e.stderr ?? ''}${e.stdout ?? ''}`;
   console.error('실행하지 못했습니다.');
-  if (/UNIQUE constraint/i.test(text)) console.error('이미 다른 사용자가 쓰고 있는 크리에이터 id입니다.');
+  if (/validation_required/.test(text)) console.error('미디어 검사를 통과하지 않은 콘텐츠는 승인할 수 없습니다.');
+  else if (/UNIQUE constraint/i.test(text)) console.error('이미 다른 사용자가 쓰고 있는 크리에이터 id입니다.');
   else if (/CHECK constraint/i.test(text)) console.error('조건에 맞지 않습니다 (예: 재생할 파일이 없는 콘텐츠).');
   else console.error(text.split('\n').filter((l) => l.trim()).slice(-5).join('\n'));
   process.exit(1);

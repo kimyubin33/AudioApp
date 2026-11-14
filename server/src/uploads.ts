@@ -196,10 +196,13 @@ export async function listMyContents(request: Request, env: AppEnv): Promise<Res
 export async function serveMedia(id: string, request: Request, env: AppEnv, preview: boolean): Promise<Response> {
   if (!isValidId(id)) throw new HttpError(400, 'invalid_request');
   const user = preview ? await requireUser(request, env) : null;
-  const row = await env.DB.prepare('SELECT creator_id, status, object_key, kind FROM contents WHERE id = ?').bind(id)
-    .first<{ creator_id: string; status: string; object_key: string | null; kind: string }>();
-  if (!row || (!preview && !extendedFormats(env) && row.kind !== 'audio') || (!preview && row.status !== 'approved') ||
-      (preview && user?.role !== 'admin' && user?.creator_id !== row.creator_id) || !row.object_key) {
+  const row = await env.DB.prepare('SELECT creator_id, status, validation_status, object_key, kind FROM contents WHERE id = ?').bind(id)
+    .first<{ creator_id: string; status: string; validation_status: string; object_key: string | null; kind: string }>();
+  const passed = row?.validation_status === 'passed';
+  // 공개 재생은 승인+검사 통과, 관리자 미리 재생은 검사 통과, 크리에이터 본인 미리 재생은 검사 상태와 무관.
+  const owner = !!row && !!user?.creator_id && user.creator_id === row.creator_id;
+  if (!row || (!preview && !extendedFormats(env) && row.kind !== 'audio') || (!preview && (row.status !== 'approved' || !passed)) ||
+      (preview && !owner && !(user?.role === 'admin' && passed)) || !row.object_key) {
     throw new HttpError(404, 'not_found');
   }
   const head = await env.MEDIA.head(row.object_key);

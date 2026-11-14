@@ -24,7 +24,7 @@ export async function adminContents(request: Request, env: AppEnv): Promise<Resp
 export async function adminDetail(id: string, request: Request, env: AppEnv): Promise<Response> {
   await requireAdmin(request, env);
   if (!isValidId(id)) throw new HttpError(400,'invalid_request');
-  const row = await env.DB.prepare(`SELECT ${fields},c.submission_json,c.object_key,c.external_url FROM contents c WHERE c.id=?`).bind(id).first<Record<string,unknown>>();
+  const row = await env.DB.prepare(`SELECT ${fields},c.validation_status,c.validation_failure_code,c.submission_json,c.object_key,c.external_url FROM contents c WHERE c.id=?`).bind(id).first<Record<string,unknown>>();
   if (!row) throw new HttpError(404,'not_found');
   const [reports, history] = await Promise.all([
     env.DB.prepare('SELECT reason, COUNT(*) AS count FROM reports WHERE content_id=? GROUP BY reason').bind(id).all(),
@@ -51,11 +51,18 @@ export async function reviewContent(id: string, request: Request, env: AppEnv): 
   }
   const status = action === 'approve'?'approved':action==='reject'?'rejected':'removed';
   const allowed = action === 'remove' ? "('pending','approved')" : "('pending')";
-  const result = await env.DB.prepare(`UPDATE contents SET status=?,reject_reason=?,review_actor=?,reviewed_at=?
-    WHERE id=? AND revision=? AND status IN ${allowed}
-    AND (? != 'approved' OR kind='post' OR object_key IS NOT NULL OR external_url IS NOT NULL)
-    AND EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin') RETURNING id`)
-    .bind(status,reason,user.id,nowSeconds(),id,body.revision as number,status,user.id).first<{id:string}>();
+  let result: {id:string} | null;
+  try {
+    result = await env.DB.prepare(`UPDATE contents SET status=?,reject_reason=?,review_actor=?,reviewed_at=?
+      WHERE id=? AND revision=? AND status IN ${allowed}
+      AND (? != 'approved' OR kind='post' OR object_key IS NOT NULL OR external_url IS NOT NULL)
+      AND EXISTS(SELECT 1 FROM users WHERE id=? AND role='admin') RETURNING id`)
+      .bind(status,reason,user.id,nowSeconds(),id,body.revision as number,status,user.id).first<{id:string}>();
+  } catch (e) {
+    // 0013 승인 게이트: 검사 통과 전 승인은 버전 충돌과 구분해 알린다.
+    if (String((e as Error)?.message ?? e).includes('validation_required')) throw new HttpError(409,'validation_required');
+    throw e;
+  }
   if (!result) throw new HttpError(409,'revision_conflict');
   return noContent();
 }
