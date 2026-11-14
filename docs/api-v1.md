@@ -23,7 +23,7 @@
 | `title` | 앞뒤 공백 제거 후 1~100자, 제어 문자 불가 |
 | `kind` | `"audio"`, `"short_video"`, `"post"` |
 | `short_style` | 쇼츠의 `"story"`, `"moment"` 또는 null. 다른 형식에는 null |
-| `duration_seconds` | 게시글은 0. 나머지는 1 이상. `audio` 최대 14400(4시간), `short_video` 최대 180(3분) |
+| `duration_seconds` | 게시글은 0. 나머지는 1 이상. `audio` 최대 1200(20분), `short_video` 최대 180(3분) |
 | `ai_generated` | **필수** `true`/`false`. 모든 콘텐츠가 값을 가짐 |
 | `ai_tool` | 선택. 1~50자. 값이 있으면 `ai_generated`는 `true`여야 함 |
 | `stream_url` | 게시글은 null. 나머지는 `https`만. 계정정보(`user:pw@`)·`#` 불가. 서명용 쿼리(`?sig=...`)는 허용 |

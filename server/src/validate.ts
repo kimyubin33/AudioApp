@@ -12,7 +12,7 @@ export type ContentKind = (typeof CONTENT_KINDS)[number];
 export const TITLE_MAX = 100;
 export const AI_TOOL_MAX = 50;
 export const DETAIL_MAX = 500;
-export const AUDIO_MAX_SECONDS = 4 * 60 * 60;
+export const AUDIO_MAX_SECONDS = 20 * 60;
 export const VIDEO_MAX_SECONDS = 180;
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
