@@ -6,7 +6,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { validateFile } from '../validator/validate.mjs';
+import { classifyExit, validateFile } from '../validator/validate.mjs';
 
 const fixtures = fileURLToPath(new URL('../e2e/fixtures/', import.meta.url));
 const missingTools = ['ffprobe', 'ffmpeg'].filter((bin) => spawnSync(bin, ['-version']).error);
@@ -32,6 +32,18 @@ const check = async (path, expected, result, failure_code, options) => {
   assert.ok(!JSON.stringify(r).includes(path), '결과에 전체 경로가 들어가면 안 된다');
   return r;
 };
+
+test('분류되지 않은 stderr는 retry/infra, 입력 데이터 오류 문구는 파일 문제로 분류', () => {
+  for (const [stage, inputFailure] of [['ffprobe', 'codec'], ['decode', 'corrupt']]) {
+    for (const stderr of ['', 'Cannot allocate memory', 'Segmentation fault', 'Conversion failed!']) {
+      const r = classifyExit(stage, 1, stderr, inputFailure);
+      assert.equal(r.result, 'retry', stderr);
+      assert.equal(r.failure_code, 'infra', stderr);
+    }
+    const r = classifyExit(stage, 1, '<input>: Invalid data found when processing input', inputFailure);
+    assert.deepEqual([r.result, r.failure_code], ['failed', inputFailure]);
+  }
+});
 
 test('tone-440.m4a (audio/mp4) → passed', { skip }, async () => {
   const p = join(fixtures, 'tone-440.m4a');

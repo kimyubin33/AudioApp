@@ -68,10 +68,7 @@ export async function validateFile(path, expected, options = {}) {
     '-show_streams', '-show_format', '-of', 'json', '-i', file,
   ], deadline, file);
   if (probe.outcome) return probe.outcome('ffprobe', base);
-  if (probe.code !== 0) {
-    if (INPUT_ERROR.test(probe.stderr)) return failed('codec', { ...base, stage: 'ffprobe', stderr: probe.stderr });
-    return retry('infra', { ...base, stage: 'ffprobe', exit_code: probe.code, stderr: probe.stderr });
-  }
+  if (probe.code !== 0) return classifyExit('ffprobe', probe.code, probe.stderr, 'codec');
   let parsed;
   try {
     parsed = JSON.parse(probe.stdout);
@@ -99,13 +96,17 @@ export async function validateFile(path, expected, options = {}) {
     '-i', file, '-map', '0:a:0', '-f', 'null', '-',
   ], deadline, file);
   if (decode.outcome) return decode.outcome('decode', base);
-  if (decode.code !== 0) {
-    if (INPUT_ERROR.test(decode.stderr)) return failed('corrupt', { ...base, stage: 'decode', stderr: decode.stderr });
-    return retry('infra', { ...base, stage: 'decode', exit_code: decode.code, stderr: decode.stderr });
-  }
+  if (decode.code !== 0) return classifyExit('decode', decode.code, decode.stderr, 'corrupt');
 
   // g. 통과
   return { result: 'passed', failure_code: null, details: { ...base, codec: format.codec, duration_seconds: duration } };
+}
+
+/** 정상 종료하지 못한 ffprobe·ffmpeg: 입력 데이터 오류 문구면 파일 문제(inputFailure), 그 밖에는 retry/infra. */
+export function classifyExit(stage, code, stderr, inputFailure) {
+  const base = { validator_version: VALIDATOR_VERSION, stage };
+  if (INPUT_ERROR.test(stderr)) return failed(inputFailure, { ...base, stderr });
+  return retry('infra', { ...base, exit_code: code, stderr });
 }
 
 function hashFile(file) {

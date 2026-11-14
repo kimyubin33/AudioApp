@@ -50,6 +50,7 @@ ffprobe·ffmpeg가 비정상 종료했을 때 stderr가 입력 데이터 오류(
 
 - `ffprobe`·`ffmpeg` 둘 다 필요하다. FFmpeg 6.0 이상을 권장한다. 개발·테스트는 FFmpeg 9.0.2(Gyan full build, Windows)로 확인했다.
 - 필요한 구성 요소: `mov`·`mp3` 디먹서, `aac`·`mp3` 디코더, `-protocol_whitelist` 옵션. 테스트 데이터 생성에는 `libmp3lame`·`lavfi`도 쓴다.
+- 운영 컨테이너는 ffmpeg 메이저 버전을 고정하고, 버전을 올릴 때 이 판정 테스트를 다시 돌린다. 판정이 stderr 문구에 일부 의존하기 때문이다.
 - 테스트(`test/validator.test.mjs`)는 PATH에 ffprobe·ffmpeg가 없으면 전체를 skip하고 이유를 출력한다.
 
 ## 보안 옵션과 이유
