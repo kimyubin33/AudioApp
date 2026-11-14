@@ -15,6 +15,7 @@ import { completeUpload, createUpload, putUpload, listMyContents, serveMedia, cl
 import { creatorProfile, uploadStatus, cancelUpload, editCreatorContent } from './creator';
 import { nearbyContents } from './nearby';
 import { createPost } from './posts';
+import { rateLimited } from './rate-limit';
 import type { AppEnv } from './types';
 import {
   DETAIL_MAX,
@@ -315,7 +316,7 @@ export default {
   },
   async fetch(request: Request, env: AppEnv): Promise<Response> {
     try {
-      return await route(request, env);
+      return (await rateLimited(request, env)) ?? await route(request, env);
     } catch (e) {
       if (e instanceof HttpError) return json(e.status, { error: e.code });
       // 입력 내용이 섞일 수 있으니 오류 이름만 기록한다

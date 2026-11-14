@@ -4,7 +4,7 @@ import {after,before,beforeEach,test} from 'node:test';
 import {createTestHarness} from 'wrangler';
 import {issueToken} from '../src/auth.ts';
 const secret='post-test-secret-post-test-secret-1234';
-const harness=createTestHarness({workers:[{configPath:'./wrangler.toml',secrets:{TOKEN_SECRET:secret,DEV_MODE:'1',ENABLE_EXTENDED_FORMATS:'1',GOOGLE_CLIENT_ID:'test',API_BASE_URL:'https://api.test'}}]});
+const harness=createTestHarness({workers:[{configPath:'./wrangler.toml',env:'test',secrets:{TOKEN_SECRET:secret,DEV_MODE:'1',ENABLE_EXTENDED_FORMATS:'1',GOOGLE_CLIENT_ID:'test',API_BASE_URL:'https://api.test'}}]});
 const worker=harness.getWorker();let env;const tokens={};
 before(async()=>{await harness.listen();await worker.applyD1Migrations('DB');env=await worker.getEnv();for(const id of ['owner','viewer','admin'])tokens[id]=await issueToken({TOKEN_SECRET:secret},id);});
 after(async()=>harness.close());

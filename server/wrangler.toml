@@ -27,5 +27,62 @@ migrations_dir = "migrations"
 binding = "MEDIA"
 bucket_name = "audioapp-media"
 
+# 요청 제한(로드맵 7.3). 라우트 → 그룹은 src/rate-limit.ts. period는 10 또는 60만 허용된다.
+[[ratelimits]]
+name = "RL_AUTH"
+namespace_id = "1101"
+simple = { limit = 10, period = 60 }
+
+[[ratelimits]]
+name = "RL_SEARCH"
+namespace_id = "1102"
+simple = { limit = 30, period = 60 }
+
+[[ratelimits]]
+name = "RL_NEARBY"
+namespace_id = "1103"
+simple = { limit = 30, period = 60 }
+
+[[ratelimits]]
+name = "RL_READ"
+namespace_id = "1104"
+simple = { limit = 120, period = 60 }
+
+[[ratelimits]]
+name = "RL_MEDIA"
+namespace_id = "1105"
+simple = { limit = 300, period = 60 }
+
+[[ratelimits]]
+name = "RL_WRITE"
+namespace_id = "1106"
+simple = { limit = 30, period = 60 }
+
+[[ratelimits]]
+name = "RL_UPLOAD"
+namespace_id = "1107"
+simple = { limit = 20, period = 60 }
+
+[[ratelimits]]
+name = "RL_ADMIN"
+namespace_id = "1108"
+simple = { limit = 60, period = 60 }
+
 [triggers]
 crons = ["17 * * * *"] # 계정 삭제 재시도 및 만료 후 1시간 지난 미완료 업로드 정리
+
+# 통합·E2E 테스트 전용(createTestHarness env: 'test'). 로컬 시뮬레이션 한도가 다른 기능 테스트를 막지 않도록
+# 한도만 크게 둔다. 한도 동작 자체는 test/rate-limit.test.mjs가 가짜 바인딩으로 검사한다. 배포하지 않는다.
+[env.test]
+d1_databases = [{ binding = "DB", database_name = "audioapp", database_id = "00000000-0000-0000-0000-000000000000", migrations_dir = "migrations" }]
+r2_buckets = [{ binding = "MEDIA", bucket_name = "audioapp-media" }]
+ratelimits = [
+  { name = "RL_AUTH", namespace_id = "1101", simple = { limit = 100000, period = 60 } },
+  { name = "RL_SEARCH", namespace_id = "1102", simple = { limit = 100000, period = 60 } },
+  { name = "RL_NEARBY", namespace_id = "1103", simple = { limit = 100000, period = 60 } },
+  { name = "RL_READ", namespace_id = "1104", simple = { limit = 100000, period = 60 } },
+  { name = "RL_MEDIA", namespace_id = "1105", simple = { limit = 100000, period = 60 } },
+  { name = "RL_WRITE", namespace_id = "1106", simple = { limit = 100000, period = 60 } },
+  { name = "RL_UPLOAD", namespace_id = "1107", simple = { limit = 100000, period = 60 } },
+  { name = "RL_ADMIN", namespace_id = "1108", simple = { limit = 100000, period = 60 } },
+]
