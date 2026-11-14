@@ -32,7 +32,7 @@ before(async () => {
 });
 after(async () => { await server.close(); });
 beforeEach(async () => {
-  for (const table of ['moderation_events', 'reports', 'uploads', 'contents', 'blocks', 'subscriptions', 'users']) await env.DB.prepare('DELETE FROM ' + table).run();
+  for (const table of ['validation_jobs', 'moderation_events', 'reports', 'uploads', 'contents', 'blocks', 'subscriptions', 'users']) await env.DB.prepare('DELETE FROM ' + table).run();
   for (const [id, role, creator] of [['owner', 'creator', 'creator_one'], ['other', 'creator', 'creator_two'], ['viewer', 'user', null], ['admin', 'admin', null]]) {
     await env.DB.prepare('INSERT INTO users (id, google_sub, role, creator_id, created_at) VALUES (?, ?, ?, ?, 1)').bind(id, id, role, creator).run();
   }
@@ -117,6 +117,73 @@ test('인증·소유권·권한 회수는 모든 업로드 단계에 적용', as
   assert.equal(n, 0);
   assert.equal((await call('GET', '/v1/me/contents')).status, 200);
   assert.equal((await call('GET', '/v1/me/contents', { as: null })).status, 401);
+});
+
+const jobs = () => env.DB.prepare('SELECT * FROM validation_jobs ORDER BY created_at, job_id').all().then(r => r.results);
+
+test('업로드 완료는 콘텐츠와 검사 작업을 함께 등록하고 재시도해도 작업은 하나', async () => {
+  const u = await create();
+  assert.equal((await put(u)).status, 204);
+  assert.equal((await complete(u)).status, 204);
+  assert.equal((await complete(u)).status, 204);
+  const id = await contentId(u);
+  const list = await jobs();
+  assert.equal(list.length, 1);
+  const [job] = list;
+  const content = await env.DB.prepare('SELECT validation_status, validation_job_id FROM contents WHERE id = ?').bind(id).first();
+  assert.equal(content.validation_job_id, job.job_id);
+  assert.equal(content.validation_status, 'pending');
+  assert.equal(job.content_id, id);
+  assert.equal(job.state, 'pending_publish');
+  assert.equal(job.attempts, 0);
+  assert.equal(job.validator_version, 1);
+  assert.equal(job.object_key, 'uploads/' + u.upload_id);
+  assert.equal(job.source_sha256, metadata.submission.file.sha256);
+  assert.ok(job.next_attempt_at >= job.created_at && job.updated_at === job.created_at);
+  // 관리자 공개 중단은 진행 중 작업을 취소한다.
+  await moderate('remove', [id, '검사 전 중단']);
+  const [cancelled] = await jobs();
+  assert.equal(cancelled.state, 'cancelled');
+  assert.ok(cancelled.updated_at >= job.updated_at);
+});
+
+test('콘텐츠가 생기지 않으면 검사 작업도 없고, 제출 명세가 없으면 완료를 거부', async () => {
+  const revoked = await create();
+  assert.equal((await put(revoked)).status, 204);
+  await moderate('demote', ['owner']);
+  assert.equal((await complete(revoked)).status, 403);
+  await moderate('promote', ['owner', 'creator_one']);
+  const expired = await create();
+  assert.equal((await put(expired)).status, 204);
+  await env.DB.prepare('UPDATE uploads SET expires_at = 1 WHERE id = ?').bind(expired.upload_id).run();
+  assert.equal((await complete(expired)).status, 410);
+  // 인증 뒤 batch 직전에 크리에이터 연결이 바뀐 경우: batch 조건으로 콘텐츠·작업 모두 생성되지 않는다.
+  const raced = await create();
+  assert.equal((await put(raced)).status, 204);
+  await env.DB.prepare("UPDATE users SET creator_id = 'creator_moved' WHERE id = 'owner'").run();
+  assert.equal((await complete(raced)).status, 409);
+  await env.DB.prepare("UPDATE users SET creator_id = 'creator_one' WHERE id = 'owner'").run();
+  const noSubmission = await create();
+  assert.equal((await put(noSubmission)).status, 204);
+  await env.DB.prepare('UPDATE uploads SET submission_json = NULL WHERE id = ?').bind(noSubmission.upload_id).run();
+  assert.equal((await complete(noSubmission)).status, 400);
+  await env.DB.prepare("UPDATE uploads SET submission_json = '{\"file\":{}}' WHERE id = ?").bind(noSubmission.upload_id).run();
+  assert.equal((await complete(noSubmission)).status, 400);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM contents').first()).n, 0);
+  assert.equal((await jobs()).length, 0);
+});
+
+test('이미 끝난 검사 작업은 공개 중단돼도 바뀌지 않는다', async () => {
+  const u = await create();
+  assert.equal((await put(u)).status, 204);
+  assert.equal((await complete(u)).status, 204);
+  const id = await contentId(u);
+  const [job] = await jobs();
+  await env.DB.prepare("UPDATE validation_jobs SET state = 'passed', updated_at = 5 WHERE job_id = ?").bind(job.job_id).run();
+  await env.DB.prepare("INSERT INTO validation_jobs (job_id, content_id, object_key, source_sha256, validator_version, state, failure_code, created_at, updated_at) VALUES ('old_failed', ?, ?, ?, 1, 'failed', 'corrupt', 1, 5)")
+    .bind(id, job.object_key, job.source_sha256).run();
+  await moderate('remove', [id, '중단']);
+  assert.deepEqual((await jobs()).map(j => [j.state, j.updated_at]).sort(), [['failed', 5], ['passed', 5]]);
 });
 
 test('메타데이터, MIME, 크기, 토큰, 만료 검증', async () => {
