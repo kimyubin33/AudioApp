@@ -209,12 +209,31 @@
 | 411 | 파일 전송의 Content-Length 필요 |
 | 413 | 파일 크기 상한 초과 |
 | 416 | 재생 Range가 올바르지 않음 |
-| 429 | 유효한 미완료 업로드 상한 초과 (`Retry-After` 헤더) |
+| 429 | `rate_limited`: 요청 제한 초과(모든 `/v1` 경로 공통, `Retry-After: 60`). 그 밖에 업로드 상한 초과(`Retry-After` 헤더)와 신고 상한 `limit_reached` |
 | 5xx | 서버 오류 |
 
 ```json
 { "error": "invalid_request" }
 ```
+
+### 요청 제한 (429 `rate_limited`)
+
+모든 `/v1` 요청은 핸들러보다 먼저 그룹별로 1분 단위 요청 수를 셉니다. 넘으면 `429 {"error":"rate_limited"}`와 `Retry-After: 60`을 돌려줍니다.
+로그인 상태(유효한 접근 토큰·웹 세션)면 사용자별로, 아니면 접속 IP별로 셉니다(IPv6는 /64 단위). `/healthz`와 웹 정적 자산은 세지 않습니다.
+공유 IP를 고려해 로그인하지 않은 요청은 일부 그룹에서 더 높은 한도를 씁니다.
+
+| 그룹 | 1분 한도 (사용자 / IP) | 대상 |
+|---|---|---|
+| auth | 10 | `POST /v1/auth/google`, `POST /v1/web/session` |
+| search | 30 / 120 | `GET /v1/contents?q=` |
+| nearby | 30 / 120 | `POST /v1/discovery/nearby` |
+| read | 120 / 600 | 그 밖의 조회(목록·상세, `/v1/me`, 구독·차단 목록, 업로드 상태) |
+| media | 300 / 1200 | `GET`·`HEAD .../media` |
+| write | 30 | 그 밖의 쓰기(신고, 구독·차단 변경, 콘텐츠 수정·게시, 계정 삭제, 약관 수락, 로그아웃) |
+| upload | 20 | 업로드 생성, 파일 PUT, 완료, 취소 |
+| admin | 60 | `/v1/admin/*` 전체 |
+
+한도 수치는 운영 중 바뀔 수 있으므로 클라이언트는 고정값에 의존하지 말고 `Retry-After`를 따릅니다.
 
 ## 아직 정하지 않은 것
 

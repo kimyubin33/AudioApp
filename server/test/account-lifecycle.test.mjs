@@ -15,7 +15,7 @@ export { putUpload } from './src/uploads';
 const api = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 const secret = 'account-lifecycle-test-secret-account-lifecycle';
 const config = { TOKEN_SECRET: secret, GOOGLE_CLIENT_ID: 'test.apps.googleusercontent.com', DEV_MODE: '1', API_BASE_URL: 'https://api.test' };
-const server = createTestHarness({ workers: [{ configPath: './wrangler.toml', secrets: config }] });
+const server = createTestHarness({ workers: [{ configPath: './wrangler.toml',env:'test', secrets: config }] });
 const worker = server.getWorker();
 let env, ownerToken, otherToken;
 const published = { POLICY_VERSION: '2026-11-v1', TERMS_URL: 'https://policy.test/terms',

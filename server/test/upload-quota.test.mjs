@@ -10,7 +10,7 @@ const bundled=await build({stdin:{contents:"export * from './src/upload-quota'; 
 const api=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
 const config={TOKEN_SECRET:'quota-test-secret-quota-test-secret-12345',GOOGLE_CLIENT_ID:'test.apps.googleusercontent.com',
   DEV_MODE:'1',API_BASE_URL:'https://api.test',UPLOAD_DAILY_COUNT:'4',UPLOAD_DAILY_BYTES:'1024',UPLOAD_STORAGE_BYTES:'2048'};
-const server=createTestHarness({workers:[{configPath:'./wrangler.toml',secrets:config}]});
+const server=createTestHarness({workers:[{configPath:'./wrangler.toml',env:'test',secrets:config}]});
 const worker=server.getWorker();
 let env,tokens={};
 const now=()=>Math.floor(Date.now()/1000);

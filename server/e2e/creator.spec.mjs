@@ -6,7 +6,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { buildCommand } from '../scripts/admin-sql.mjs';
 const secret='browser-integration-secret-not-a-real-service-secret';
-const server=createTestHarness({workers:[{configPath:'./wrangler.toml',secrets:{
+const server=createTestHarness({workers:[{configPath:'./wrangler.toml',env:'test',secrets:{
  TOKEN_SECRET:secret,GOOGLE_CLIENT_ID:'',DEV_MODE:'1',ENABLE_EXTENDED_FORMATS:'1',API_BASE_URL:'https://unused-app-origin.test'}}]});
 const worker=server.getWorker();let env,base;
 test.beforeAll(async()=>{base=(await server.listen()).url.origin;await worker.applyD1Migrations('DB');env=await worker.getEnv();});
