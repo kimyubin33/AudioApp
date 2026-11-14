@@ -1,5 +1,5 @@
 // 업로드 원본 미디어 검사 규칙 (로드맵 7.2의 4~7번). Node 전용, Workers 빌드에 포함하지 않는다.
-// 큐 연결·결과 반영은 호출 측 몫이다. 재시도 상한(VALIDATION_MAX_ATTEMPTS)도 호출 측이 적용한다.
+// 큐 연결은 호출 측 몫이다. 결과 반영과 재시도 상한은 src/validation-results.ts(applyValidationResult)가 맡는다.
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
