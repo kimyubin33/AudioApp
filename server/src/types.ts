@@ -18,6 +18,11 @@ export interface AppEnv {
   RL_WRITE: RateLimit;
   RL_UPLOAD: RateLimit;
   RL_ADMIN: RateLimit;
+  /** 로그인 없는 요청(IP 키) 전용, 높은 한도. */
+  RL_READ_IP: RateLimit;
+  RL_MEDIA_IP: RateLimit;
+  RL_SEARCH_IP: RateLimit;
+  RL_NEARBY_IP: RateLimit;
   /** API의 공개 HTTPS 원점. TLS 프록시를 쓰는 로컬 개발에서도 지정할 수 있다. */
   API_BASE_URL?: string;
   /** '1'이면 로컬 개발용 가짜 로그인 허용. 배포 환경에서는 설정하지 않는다 */

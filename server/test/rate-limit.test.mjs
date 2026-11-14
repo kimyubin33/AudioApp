@@ -12,7 +12,7 @@ const outDir = mkdtempSync(join(tmpdir(), 'rate-limit-'));
 await build({ entryPoints: { index: 'src/index.ts', rl: 'src/rate-limit.ts' }, bundle: true, format: 'esm', platform: 'neutral',
   outdir: outDir, outExtension: { '.js': '.mjs' }, logLevel: 'error' });
 const { default: worker } = await import(pathToFileURL(join(outDir, 'index.mjs')));
-const { RATE_GROUPS, rateGroup } = await import(pathToFileURL(join(outDir, 'rl.mjs')));
+const { RATE_GROUPS, IP_RATE_GROUPS, ipKey, rateGroup } = await import(pathToFileURL(join(outDir, 'rl.mjs')));
 rmSync(outDir, { recursive: true, force: true });
 
 const SECRET = 'rate-limit-unit-test-secret-rate-limit-1';
@@ -35,9 +35,10 @@ function fakeDb() {
 function makeEnv(limit = 1000, shared) {
   const env = { TOKEN_SECRET: SECRET, GOOGLE_CLIENT_ID: 'test', DB: fakeDb(),
     ASSETS: { fetch: async () => new Response('asset', { status: 200 }) } };
-  for (const binding of Object.values(RATE_GROUPS)) env[binding] = shared ?? limiter(limit);
+  for (const binding of ALL_BINDINGS) env[binding] = shared ?? limiter(limit);
   return env;
 }
+const ALL_BINDINGS = [...Object.values(RATE_GROUPS), ...Object.values(IP_RATE_GROUPS)];
 const call = (env, method, path, headers = {}) => worker.fetch(new Request('https://api.test' + path, { method, headers }), env);
 const userToken = await issueToken({ TOKEN_SECRET: SECRET }, 'u_1');
 const auth = { Authorization: 'Bearer ' + userToken };
@@ -111,7 +112,8 @@ test('위조·만료 토큰은 IP 키로 세고, 이후 401은 기존 인증 로
     assert.equal(r.status, 401);
     assert.deepEqual(await r.json(), { error: 'unauthorized' });
   }
-  assert.deepEqual(env.RL_READ.keys, Array(3).fill(`read:ip:${IP}`));
+  assert.deepEqual(env.RL_READ_IP.keys, Array(3).fill(`read:ip:${IP}`));
+  assert.deepEqual(env.RL_READ.keys, []);
 });
 
 test('웹 세션 쿠키도 서명 검증 후 사용자 키로 쓴다', async () => {
@@ -123,7 +125,7 @@ test('웹 세션 쿠키도 서명 검증 후 사용자 키로 쓴다', async () 
 test('바인딩이 예외를 던지면 요청을 허용하고 오류 이름만 남긴다', async (t) => {
   const errors = t.mock.method(console, 'error', () => {});
   const env = makeEnv();
-  env.RL_READ = { limit: async () => { throw new TypeError('binding down ' + IP); } };
+  env.RL_READ_IP = { limit: async () => { throw new TypeError('binding down ' + IP); } };
   const r = await call(env, 'GET', '/v1/me', { 'CF-Connecting-IP': IP });
   assert.equal(r.status, 401); // 핸들러까지 도달
   assert.deepEqual(errors.mock.calls.map((c) => c.arguments), [['rate limit error', 'TypeError']]);
@@ -133,5 +135,41 @@ test('/healthz와 정적 웹 자산은 제한하지 않는다', async () => {
   const env = makeEnv(0);
   assert.equal((await call(env, 'GET', '/healthz')).status, 200);
   for (const path of ['/', '/creator', '/admin', '/delete-account', '/assets/app.js']) assert.equal((await call(env, 'GET', path)).status, 200, path);
-  for (const binding of Object.values(RATE_GROUPS)) assert.deepEqual(env[binding].keys, []);
+  for (const binding of ALL_BINDINGS) assert.deepEqual(env[binding].keys, []);
+});
+
+test('로그인 없는 요청은 read·media·search·nearby에서 *_IP 바인딩(높은 한도), 사용자 키는 기존 바인딩', async () => {
+  const env = makeEnv();
+  for (const [group, ip] of Object.entries(IP_RATE_GROUPS)) { env[RATE_GROUPS[group]] = limiter(1); env[ip] = limiter(3); }
+  const user = [], anon = [];
+  for (let i = 0; i < 4; i++) {
+    user.push((await call(env, 'GET', '/v1/me', auth)).status === 429);
+    anon.push((await call(env, 'GET', '/v1/me', { 'CF-Connecting-IP': IP })).status === 429);
+  }
+  assert.deepEqual(user, [false, true, true, true]);
+  assert.deepEqual(anon, [false, false, false, true]);
+  for (const [method, path, group] of [['GET', '/v1/contents/c_1/media', 'media'], ['GET', '/v1/contents?q=a', 'search'], ['POST', '/v1/discovery/nearby', 'nearby']]) {
+    await call(env, method, path, { 'CF-Connecting-IP': IP });
+    assert.deepEqual(env[IP_RATE_GROUPS[group]].keys, [`${group}:ip:${IP}`], group);
+    assert.deepEqual(env[RATE_GROUPS[group]].keys, [], group);
+  }
+  // auth·write·upload·admin은 IP 키여도 기존 바인딩
+  for (const [method, path, binding] of [['POST', '/v1/auth/google', 'RL_AUTH'], ['POST', '/v1/reports', 'RL_WRITE'], ['POST', '/v1/uploads', 'RL_UPLOAD'], ['GET', '/v1/admin/user', 'RL_ADMIN']]) {
+    await call(env, method, path, { 'CF-Connecting-IP': IP });
+    assert.equal(env[binding].keys.at(-1).endsWith(`:ip:${IP}`), true, binding);
+  }
+});
+
+test('IPv6는 /64로 묶고 다른 /64는 분리, IPv4와 IPv4 매핑은 주소 그대로', async () => {
+  assert.equal(ipKey('2001:db8:1:2::1'), '2001:db8:1:2::/64');
+  assert.equal(ipKey('2001:0db8:0001:0002:ffff:eeee:dddd:cccc'), '2001:db8:1:2::/64');
+  assert.equal(ipKey('2001:db8:1:3::1'), '2001:db8:1:3::/64');
+  assert.equal(ipKey('2001:db8::'), '2001:db8:0:0::/64');
+  assert.equal(ipKey('::1'), '0:0:0:0::/64');
+  assert.equal(ipKey('::ffff:198.51.100.9'), '198.51.100.9');
+  assert.equal(ipKey('198.51.100.9'), '198.51.100.9');
+  assert.equal(ipKey('1::2::3'), '1::2::3'); // 해석 불가는 원문
+  const env = makeEnv();
+  for (const ip of ['2001:db8:1:2::1', '2001:db8:1:2:aaaa:bbbb:cccc:dddd', '2001:db8:1:3::1']) await call(env, 'GET', '/v1/me', { 'CF-Connecting-IP': ip });
+  assert.deepEqual(env.RL_READ_IP.keys, ['read:ip:2001:db8:1:2::/64', 'read:ip:2001:db8:1:2::/64', 'read:ip:2001:db8:1:3::/64']);
 });
