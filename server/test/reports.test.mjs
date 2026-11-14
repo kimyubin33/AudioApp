@@ -9,11 +9,11 @@ before(async()=>{await harness.listen();await worker.applyD1Migrations('DB');env
  for(const id of ['owner','viewer','other','admin'])tokens[id]=await issueToken({TOKEN_SECRET:secret},id);});
 after(async()=>harness.close());
 beforeEach(async()=>{
- for(const table of ['reports','moderation_events','uploads','contents','blocks','subscriptions','users'])await env.DB.prepare('DELETE FROM '+table).run();
+ for(const table of ['validation_jobs','reports','moderation_events','uploads','contents','blocks','subscriptions','users'])await env.DB.prepare('DELETE FROM '+table).run();
  for(const [id,role,creator]of [['owner','creator','creator_one'],['viewer','user',null],['other','user',null],['admin','admin',null]])
   await env.DB.prepare('INSERT INTO users(id,google_sub,role,creator_id,created_at) VALUES(?,?,?,?,1)').bind(id,id,role,creator).run();
  for(const [id,kind]of [['audio','audio'],['short','short_video']])
-  await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,external_url,created_at) VALUES(?,'creator_one',?,?,10,1,'approved','https://media.test/sample',1)").bind(id,id,kind).run();
+  await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,validation_status,external_url,created_at) VALUES(?,'creator_one',?,?,10,1,'approved','passed','https://media.test/sample',1)").bind(id,id,kind).run();
 });
 async function call(method,path,{as='viewer',body}={}){
  return worker.fetch('https://api.test'+path,{method,headers:{...(as?{Authorization:'Bearer '+tokens[as]}:{}),...(body!==undefined?{'Content-Type':'application/json'}:{})},body:body===undefined?undefined:JSON.stringify(body)});
@@ -41,7 +41,13 @@ test('검토 → 공개 중단 → 신고 결과 조회와 감사 기록, 중복
  assert.equal((await review(id,'review')).status,204);
  assert.equal((await review(id,'remove_content')).status,409);
  assert.equal((await review(id,'remove_content',{revision:2,confirmed:false})).status,400);
+ // 0009 신고 조치 트리거가 contents를 removed로 바꾸면 0012가 진행 중 검사 작업만 취소한다.
+ for(const [job,state]of [['vj_active','queued'],['vj_done','passed']])
+  await env.DB.prepare("INSERT INTO validation_jobs(job_id,content_id,object_key,source_sha256,validator_version,state,created_at,updated_at) VALUES(?,'audio','k',?,1,?,1,1)").bind(job,'a'.repeat(64),state).run();
  assert.equal((await review(id,'remove_content',{revision:2})).status,204);
+ const jobStates=(await env.DB.prepare('SELECT job_id,state,updated_at FROM validation_jobs ORDER BY job_id').all()).results;
+ assert.deepEqual(jobStates.map(j=>[j.job_id,j.state]),[['vj_active','cancelled'],['vj_done','passed']]);
+ assert.ok(jobStates[0].updated_at>1);assert.equal(jobStates[1].updated_at,1);
  assert.equal((await call('GET','/v1/contents/audio',{as:null})).status,404);
  assert.equal((await call('GET','/v1/contents/audio/media',{as:null})).status,404);
  const own=(await(await call('GET','/v1/me/reports')).json()).items[0];
@@ -73,7 +79,7 @@ test('신고 대상·사유·설명 검증 및 중복 방지, 새 신고 일일 
  assert.equal((await call('POST','/v1/reports',{body:{content_id:'missing',reason:'spam'}})).status,404);
  await report();await report();
  assert.equal((await env.DB.prepare('SELECT COUNT(*) AS n FROM reports').first()).n,1);
- for(let i=0;i<20;i++)await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,external_url,created_at) VALUES(?,'creator_one','test','audio',1,0,'approved','https://media.test/a',1)").bind('a'+i).run();
+ for(let i=0;i<20;i++)await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,validation_status,external_url,created_at) VALUES(?,'creator_one','test','audio',1,0,'approved','passed','https://media.test/a',1)").bind('a'+i).run();
  const results=await Promise.all(Array.from({length:20},(_,i)=>call('POST','/v1/reports',{body:{content_id:'a'+i,reason:'spam'}})));
  assert.equal(results.filter(r=>r.status===204).length,19);
  assert.equal(results.filter(r=>r.status===429).length,1);

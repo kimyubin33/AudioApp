@@ -5,12 +5,20 @@ import { BASE_HEADERS, HttpError, apiBase, json, newId, noContent, nowSeconds, r
 import { isValidId, parseLimit } from './validate';
 import { checkAttachedAudio } from './posts';
 import { validateSubmission } from './submission';
+import { VALIDATOR_VERSION } from './media-validation';
 import { MAX_OPEN_UPLOADS, MAX_UPLOAD_BYTES, MAX_POST_IMAGE_BYTES, UPLOAD_TTL_SECONDS, matchesMediaHeader, uploadMetadata, type MediaType } from './upload-validation';
 
 interface UploadRow {
   id: string; user_id: string; creator_id: string; content_id: string; object_key: string;
   kind: string; content_type: MediaType; token_hash: string; state: string; expires_at: number; uploaded_bytes: number | null;
   submission_json: string | null;
+}
+/** 검사 작업이 확인할 원본 SHA-256. 새 업로드는 항상 제출 명세를 가지므로 없으면 오류다. */
+function sourceSha256(submissionJson: string | null): string | null {
+  try {
+    const sha = submissionJson ? JSON.parse(submissionJson)?.file?.sha256 : null;
+    return typeof sha === 'string' && /^[a-f0-9]{64}$/.test(sha) ? sha : null;
+  } catch { return null; }
 }
 const hash = async (s: string): Promise<string> =>
   Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))), b => b.toString(16).padStart(2, '0')).join('');
@@ -119,6 +127,8 @@ export async function completeUpload(id: string, request: Request, env: AppEnv):
   if (row.state === 'completed') return noContent(); // 네트워크 오류 뒤 재시도해도 한 콘텐츠만 생성
   if (row.expires_at <= nowSeconds()) throw new HttpError(410, 'upload_expired');
   if (row.state !== 'uploaded') throw new HttpError(409, 'upload_not_ready');
+  const sha256 = sourceSha256(row.submission_json);
+  if (!sha256) throw new HttpError(400, 'invalid_request');
   const object = await env.MEDIA.get(row.object_key, { range: { offset: 0, length: 64 } });
   if (!object || object.size !== row.uploaded_bytes || object.size < 1 || object.size > (row.kind==='post'?MAX_POST_IMAGE_BYTES:MAX_UPLOAD_BYTES) ||
       object.httpMetadata?.contentType !== row.content_type || object.customMetadata?.upload_id !== id) {
@@ -131,15 +141,27 @@ export async function completeUpload(id: string, request: Request, env: AppEnv):
     await env.MEDIA.delete(row.object_key);
     throw new HttpError(400, 'invalid_file');
   }
-  // D1 batch는 트랜잭션이다. 업로드 완료와 pending 콘텐츠 생성이 함께 성공한다.
-  // 전송 중 권한이 회수됐거나 시간이 만료됐으면 공개 대기열에도 들어가지 않는다.
+  // D1 batch는 트랜잭션이다. 업로드 완료, pending 콘텐츠 생성, 검사 작업 등록이 함께 성공한다.
+  // 전송 중 권한이 회수됐거나 시간이 만료됐으면 공개 대기열에도, 검사 대기열에도 들어가지 않는다.
+  const now = nowSeconds();
+  const jobId = newId('vj');
   await env.DB.batch([
     env.DB.prepare(`INSERT OR IGNORE INTO contents
       (id, creator_id, title, kind, duration_seconds, ai_generated, ai_tool, status, object_key, created_at, submission_json, short_style)
       SELECT content_id, creator_id, title, kind, duration_seconds, ai_generated, ai_tool, 'pending', object_key, ?, submission_json, short_style
       FROM uploads WHERE id = ? AND state = 'uploaded' AND expires_at > ?
         AND EXISTS (SELECT 1 FROM users WHERE id = uploads.user_id AND creator_id = uploads.creator_id AND deletion_requested_at IS NULL AND role IN ('creator', 'admin'))`)
-      .bind(nowSeconds(), id, nowSeconds()),
+      .bind(now, id, now),
+    // 이 업로드로 방금 생긴 콘텐츠(아직 작업이 없는 같은 원본)에만 작업을 등록한다. 발행은 아직 연결되지 않았다.
+    env.DB.prepare(`INSERT INTO validation_jobs
+      (job_id, content_id, object_key, source_sha256, validator_version, state, attempts, next_attempt_at, created_at, updated_at)
+      SELECT ?, content_id, object_key, ?, ?, 'pending_publish', 0, ?, ?, ?
+      FROM uploads WHERE id = ? AND state = 'uploaded'
+        AND EXISTS (SELECT 1 FROM contents WHERE id = uploads.content_id AND object_key = uploads.object_key AND validation_job_id IS NULL)`)
+      .bind(jobId, sha256, VALIDATOR_VERSION, now, now, now, id),
+    env.DB.prepare(`UPDATE contents SET validation_job_id = ?
+      WHERE validation_job_id IS NULL AND EXISTS (SELECT 1 FROM validation_jobs WHERE job_id = ? AND content_id = contents.id)`)
+      .bind(jobId, jobId),
     env.DB.prepare(`UPDATE uploads SET state = 'completed', token_hash = ''
       WHERE id = ? AND state = 'uploaded' AND EXISTS (SELECT 1 FROM contents WHERE id = uploads.content_id)`).bind(id),
   ]);
@@ -174,10 +196,13 @@ export async function listMyContents(request: Request, env: AppEnv): Promise<Res
 export async function serveMedia(id: string, request: Request, env: AppEnv, preview: boolean): Promise<Response> {
   if (!isValidId(id)) throw new HttpError(400, 'invalid_request');
   const user = preview ? await requireUser(request, env) : null;
-  const row = await env.DB.prepare('SELECT creator_id, status, object_key, kind FROM contents WHERE id = ?').bind(id)
-    .first<{ creator_id: string; status: string; object_key: string | null; kind: string }>();
-  if (!row || (!preview && !extendedFormats(env) && row.kind !== 'audio') || (!preview && row.status !== 'approved') ||
-      (preview && user?.role !== 'admin' && user?.creator_id !== row.creator_id) || !row.object_key) {
+  const row = await env.DB.prepare('SELECT creator_id, status, validation_status, object_key, kind FROM contents WHERE id = ?').bind(id)
+    .first<{ creator_id: string; status: string; validation_status: string; object_key: string | null; kind: string }>();
+  const passed = row?.validation_status === 'passed';
+  // 공개 재생은 승인+검사 통과, 관리자 미리 재생은 검사 통과, 크리에이터 본인 미리 재생은 검사 상태와 무관.
+  const owner = !!row && !!user?.creator_id && user.creator_id === row.creator_id;
+  if (!row || (!preview && !extendedFormats(env) && row.kind !== 'audio') || (!preview && (row.status !== 'approved' || !passed)) ||
+      (preview && !owner && !(user?.role === 'admin' && passed)) || !row.object_key) {
     throw new HttpError(404, 'not_found');
   }
   const head = await env.MEDIA.head(row.object_key);

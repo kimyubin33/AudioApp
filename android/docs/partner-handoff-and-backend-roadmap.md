@@ -226,6 +226,7 @@ D1은 읽기·쓰기·저장량 기준 비용과 단일 DB 크기 제한이 있�
 7. 공개 HTTPS API, /creator, /admin, /delete-account, 실제 정책 URL을 연결한다.
 8. 앱의 releaseApiBaseUrl·googleWebClientId를 설정하고 실제 Google 계정으로 전 과정을 검증한다.
 9. 운영 배포는 CI의 승인 단계, 마이그레이션 기록, 배포 버전과 복구 계획을 남긴다.
+10. 0011 이후 마이그레이션은 기존 콘텐츠를 모두 validation_status=pending으로 만든다. 공개 콘텐츠가 있는 DB에 적용하기 전에 재검사 계획을 세운다.
 
 현재 운영 리소스가 외부에 이미 있을 수 있으나 이 작업에서는 확인하지 않았다.
 로컬 DB를 reset하거나 개발 샘플을 운영 DB에 넣어서 준비를 대신하지 않는다.

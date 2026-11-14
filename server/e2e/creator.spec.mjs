@@ -4,6 +4,7 @@ import { issueToken } from '../src/auth.ts';
 import { zipSync } from 'fflate';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { buildCommand } from '../scripts/admin-sql.mjs';
 const secret='browser-integration-secret-not-a-real-service-secret';
 const server=createTestHarness({workers:[{configPath:'./wrangler.toml',secrets:{
  TOKEN_SECRET:secret,GOOGLE_CLIENT_ID:'',DEV_MODE:'1',ENABLE_EXTENDED_FORMATS:'1',API_BASE_URL:'https://unused-app-origin.test'}}]});
@@ -11,10 +12,12 @@ const worker=server.getWorker();let env,base;
 test.beforeAll(async()=>{base=(await server.listen()).url.origin;await worker.applyD1Migrations('DB');env=await worker.getEnv();});
 test.afterAll(async()=>{await server.close();});
 test.beforeEach(async()=>{
- for(const table of ['moderation_events','reports','uploads','contents','blocks','subscriptions','users'])await env.DB.prepare('DELETE FROM '+table).run();
+ for(const table of ['validation_jobs','moderation_events','reports','uploads','contents','blocks','subscriptions','users'])await env.DB.prepare('DELETE FROM '+table).run();
  for(const [id,role,creator] of [['web_owner','creator','creator_web'],['web_admin','admin',null],['web_viewer','user',null]])
   await env.DB.prepare('INSERT INTO users(id,google_sub,role,creator_id,created_at) VALUES(?,?,?,?,1)').bind(id,id,role,creator).run();
 });
+// 검사기가 아직 없으므로 승인 전 테스트 데이터는 로컬 개발 명령(validation-pass)과 같은 SQL로 검사 통과 처리한다.
+async function passValidation(id){await env.DB.batch(buildCommand('validation-pass',[id]).statements.map(s=>env.DB.prepare(s)));}
 async function signContext(browser,id){
  const context=await browser.newContext();await context.addCookies([{name:'audio_dev_session',value:await issueToken({TOKEN_SECRET:secret},id),
   url:base,httpOnly:true,sameSite:'Strict',secure:false}]);return context;
@@ -75,6 +78,7 @@ test('여러 ZIP 검증·초안 복원 → 비공개 제출 → 버전 충돌 �
  await expect(page.getByRole('heading',{name:'검수를 요청했습니다'})).toBeVisible({timeout:30_000});
  const listed=await (await worker.fetch(base+'/v1/contents')).json();expect(listed.items).toHaveLength(0);
  const content=await env.DB.prepare('SELECT id,revision FROM contents').first();expect(content.revision).toBe(1);
+ await passValidation(content.id);
  expect(await page.evaluate(()=>document.cookie)).toBe('');
  const review=await admin.newPage();await review.goto(base+'/admin');
  await review.getByRole('button',{name:'원본·제출 정보 검토',exact:true}).click();await playAndConfirm(review,true);
@@ -168,6 +172,7 @@ test('AI 쇼츠는 실제 영상 트랙·해상도·미리 재생을 확인하�
   await page.getByLabel('사용한 AI 도구의 약관에서 이 결과물의 배포를 허용하는지 확인했습니다.').check();
   await step(page,'5. 최종 검토');await page.getByRole('button',{name:'검수 요청',exact:true}).click();await expect(page.getByRole('heading',{name:'검수를 요청했습니다'})).toBeVisible();
   const row=await env.DB.prepare('SELECT * FROM contents').first();expect(row.kind).toBe('short_video');expect(row.short_style).toBe('moment');expect(row.status).toBe('pending');
+  await passValidation(row.id);
   const response=await worker.fetch(base+'/v1/admin/contents/'+row.id+'/review',{method:'POST',headers:{Authorization:'Bearer '+await issueToken({TOKEN_SECRET:secret},'web_admin'),'Content-Type':'application/json'},
    body:JSON.stringify({action:'approve',revision:1,file_reviewed:true,rights_reviewed:true,metadata_reviewed:true})});expect(response.status).toBe(204);
   expect((await (await worker.fetch(base+'/v1/contents?kind=short_video')).json()).items).toHaveLength(1);
@@ -190,6 +195,8 @@ test('텍스트 게시글: 비AI 초안 복원·권리 확인·검수·승인 �
   await expect(page.getByRole('heading',{name:'검수를 요청했습니다'})).toBeVisible();
   const row=await env.DB.prepare('SELECT * FROM contents').first();expect(row.kind).toBe('post');expect(row.ai_generated).toBe(0);
   expect((await (await worker.fetch(base+'/v1/contents?kind=post')).json()).items).toHaveLength(0);
+  // 사진 없는 글은 검사 작업이 없으므로 테스트 데이터에 검사 통과를 직접 표시한다.
+  await env.DB.prepare("UPDATE contents SET validation_status='passed',validation_version=1 WHERE id=?").bind(row.id).run();
   const review=await admin.newPage();await review.goto(base+'/admin');await review.getByRole('button',{name:'원본·제출 정보 검토',exact:true}).click();
   await expect(review.getByText('바다에서 가족과 보낸 하루',{exact:true})).toBeVisible();
   for(const label of ['게시글의 사진과 내용을 확인했습니다.','권리 진술·이용 근거와 필요 동의를 확인했습니다.','제목·AI 표시·설명·태그와 선택적 공개 장소를 확인했습니다.'])await review.getByLabel(label).check();
@@ -212,6 +219,7 @@ test('사진 게시글은 운영자 모바일 화면 안에서 확인·승인할
   expect(ticketResponse.status).toBe(201);const ticket=await ticketResponse.json();
   expect((await worker.fetch(ticket.upload_url,{method:'PUT',headers:{Authorization:authorization,'Content-Type':'image/jpeg','Content-Length':String(photo.length)},body:photo})).status).toBe(204);
   expect((await worker.fetch(base+'/v1/uploads/'+ticket.upload_id+'/complete',{method:'POST',headers:{Authorization:authorization}})).status).toBe(204);
+  await passValidation((await env.DB.prepare('SELECT content_id FROM uploads WHERE id=?').bind(ticket.upload_id).first()).content_id);
   await page.reload();await page.getByRole('button',{name:'원본·제출 정보 검토',exact:true}).click();
   await expect(page.getByRole('img',{name:'Photo Post'})).toBeVisible();
   await expect(page.getByLabel('게시글의 사진과 내용을 확인했습니다.')).toBeEnabled();
@@ -255,7 +263,7 @@ test('정책 링크와 동의란은 미리 선택되지 않고 계정 삭제 경
  }finally{await context.close();}
 });
 test('관리자가 신고 내용을 확인해 공개를 중단하면 신고자에게 처리 결과가 보인다',async({browser})=>{
- await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,external_url,created_at) VALUES('reported-audio','creator_web','신고 오디오','audio',10,1,'approved','https://media.test/audio',1)").run();
+ await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,validation_status,external_url,created_at) VALUES('reported-audio','creator_web','신고 오디오','audio',10,1,'approved','passed','https://media.test/audio',1)").run();
  const token=await issueToken({TOKEN_SECRET:secret},'web_viewer');
  expect((await worker.fetch(base+'/v1/reports',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({content_id:'reported-audio',reason:'copyright',detail:'원저작자 허락을 확인해 주세요.'})})).status).toBe(204);
  const context=await signContext(browser,'web_admin');

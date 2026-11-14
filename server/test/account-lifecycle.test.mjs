@@ -95,7 +95,7 @@ test('탈퇴는 다른 로그인 계정과 미가입 Google 계정으로 대신�
 });
 test('탈퇴 접수 즉시 공개 콘텐츠·기존 토큰·재가입·추가 제출을 차단하고 중복 접수는 안전하다', async () => {
   const row = await uploaded();
-  await env.DB.prepare("UPDATE contents SET status='approved' WHERE id=?").bind(row.content_id).run();
+  await env.DB.prepare("UPDATE contents SET validation_status='passed',status='approved' WHERE id=?").bind(row.content_id).run();
   for (let i = 0; i < 2; i++) {
     const response = await call('/v1/me/deletion', deletion);
     assert.equal(response.status, 202);
@@ -109,6 +109,10 @@ test('탈퇴 접수 즉시 공개 콘텐츠·기존 토큰·재가입·추가 �
   const clone = await env.DB.prepare("SELECT * FROM contents WHERE id=?").bind(row.content_id).first();
   await assert.rejects(env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,created_at) VALUES('late','creator_one','late','audio',20,1,1)").run());
   assert.equal(clone.status, 'removed');
+  // 0008 탈퇴 접수의 일괄 removed도 0012를 거쳐 업로드 완료 때 등록된 검사 작업을 취소한다.
+  const job = await env.DB.prepare('SELECT state FROM validation_jobs WHERE content_id=?').bind(row.content_id).first();
+  assert.equal(job.state, 'cancelled');
+  assert.equal(clone.validation_job_id !== null, true);
 });
 test('R2 실패 시 계정과 삭제 목록을 유지하며 재시도 후 DB·R2·동의 기록을 정리한다', async () => {
   const row = await uploaded();
