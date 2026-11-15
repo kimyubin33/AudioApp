@@ -24,7 +24,15 @@ node server/validator/cli.mjs <file> --type audio/mp4 --size 9399 --sha256 <hex6
 
 CLI는 결과를 JSON 한 줄로 출력하고 종료 코드 0을 낸다. 인자가 잘못되면 사용법을 stderr에 쓰고 종료 코드 2를 낸다.
 
-`retry`는 한 번의 시도 결과다. 재시도 횟수를 세고 `VALIDATION_MAX_ATTEMPTS`(3)에 도달하면 `failed`로 확정하는 일은 큐 처리 측이 한다.
+검사 결과는 `src/validation-results.ts`의 `applyValidationResult`로 반영한다. HTTP 전달 방식은 공급자 결정 후 추가한다.
+
+`retry`는 한 번의 시도 결과다. 재시도 횟수를 세고 `VALIDATION_MAX_ATTEMPTS`(3)에 도달하면 `failed`로 확정하는 일은 `applyValidationResult`가 한다.
+`retry`는 `timeout`·`infra` 코드만 받는다.
+
+매시 cron(`sweepValidationJobs`)이 남은 작업을 같은 반영 규칙으로 정리한다. 한 번에 최대 100건이다.
+
+- `running`인 채 15분(`VALIDATION_RUNNING_STALE_SECONDS`) 넘게 갱신이 없으면 retry/timeout으로 처리한다. 15분은 검사 제한 시간 120초보다 넉넉하게 잡아, 정상 진행 중인 검사를 끊지 않기 위한 값이다.
+- 시도를 다 쓰고 `queued`·`pending_publish`로 남은 작업은 failed/timeout으로 확정한다.
 
 ## 판정 순서
 
