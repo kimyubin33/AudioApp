@@ -1,6 +1,8 @@
 // 관리자 도구가 쓰는 SQL을 만든다. 입력 검증과 SQL 조립만 하고, 실행은 admin.mjs가 한다.
 // 사용자가 입력한 값은 (1) 엄격한 형식(id)이거나 (2) 따옴표를 이스케이프한 짧은 문장이다.
 
+import { VALIDATOR_VERSION } from '../src/media-validation.ts';
+
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const REASON_MAX = 200;
 
@@ -30,7 +32,7 @@ const REPORT_COUNT = '(SELECT COUNT(*) FROM reports r WHERE r.content_id = c.id)
  *   - expectChanges: 이 명령으로 정확히 몇 행이 바뀌어야 성공인지 (0이면 조건에 안 맞는 것)
  */
 export function buildCommand(command, args) {
-  const exact = { pending: 0, show: 1, approve: 2, reports: 0, users: 0, creators: 0, promote: 2, demote: 1, 'make-admin': 1, download: 2 };
+  const exact = { pending: 0, show: 1, approve: 2, reports: 0, users: 0, creators: 0, promote: 2, demote: 1, 'make-admin': 1, download: 2, 'validation-pass': 1 };
   if (Object.hasOwn(exact, command) && args.length !== exact[command]) throw new UsageError('명령의 인수 개수가 올바르지 않습니다.');
   if (['reject', 'remove'].includes(command) && args.length < 2) throw new UsageError('콘텐츠 id와 사유를 적어 주세요.');
   if (args.some(a => a.startsWith('--'))) throw new UsageError('알 수 없는 옵션입니다.');
@@ -134,6 +136,21 @@ export function buildCommand(command, args) {
       };
     }
 
+    case 'validation-pass': {
+      // 로컬 개발 전용: 검사기 없이 현재 검사 작업을 통과 처리한다. 원격 DB에서는 admin.mjs가 거부한다.
+      // 현재 작업이 없거나(외부 URL 샘플 등) 취소된 작업이면 아무것도 바꾸지 않는다.
+      const cid = id(args[0], '콘텐츠 id');
+      const statements = [
+        `UPDATE validation_jobs SET state = 'passed', failure_code = NULL, updated_at = unixepoch()
+           WHERE content_id = '${cid}' AND state != 'cancelled'
+             AND job_id = (SELECT validation_job_id FROM contents WHERE id = '${cid}') RETURNING job_id;`,
+        `UPDATE contents SET validation_status = 'passed', validation_version = ${VALIDATOR_VERSION}, validation_failure_code = NULL
+           WHERE id = '${cid}' AND EXISTS (SELECT 1 FROM validation_jobs j
+             WHERE j.job_id = contents.validation_job_id AND j.content_id = contents.id AND j.state = 'passed') RETURNING id;`,
+      ];
+      return { write: true, localOnly: true, expectChanges: 2, returning: true, statements, sql: statements.join('\n') };
+    }
+
     case 'make-admin': {
       const uid = id(args[0], '사용자 id');
       return {
@@ -162,6 +179,9 @@ export const HELP = `사용법: npm run admin -- <명령> [값...] [--remote] [-
   approve <콘텐츠id> <revision>  확인한 버전 승인 (공개됨)
   reject  <콘텐츠id> <사유>    반려 (대기 중인 것만)
   remove  <콘텐츠id> <사유>    공개 중인 콘텐츠 내리기
+
+로컬 개발 전용 (--remote 거부)
+  validation-pass <콘텐츠id>   검사기 대신 현재 검사 작업과 콘텐츠를 검사 통과로 표시
 
 권한
   promote <사용자id> <크리에이터id>   업로드 가능한 크리에이터로 승인

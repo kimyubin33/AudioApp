@@ -7,7 +7,7 @@ import { validateSubmission } from './submission';
 /** 오디오 연결은 승인된 공개 오디오에 한정한다. URL·파일 경로를 제출받지 않는다. */
 export async function checkAttachedAudio(id: string | undefined, userId: string, env: AppEnv) {
   if (!id) return;
-  const row = await env.DB.prepare(`SELECT id FROM contents c WHERE id=? AND kind='audio' AND status='approved'
+  const row = await env.DB.prepare(`SELECT id FROM contents c WHERE id=? AND kind='audio' AND status='approved' AND validation_status='passed'
     AND NOT EXISTS(SELECT 1 FROM blocks b WHERE b.user_id=? AND b.creator_id=c.creator_id)`).bind(id,userId).first();
   if (!row) throw new HttpError(400,'invalid_audio');
 }

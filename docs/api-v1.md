@@ -23,7 +23,7 @@
 | `title` | 앞뒤 공백 제거 후 1~100자, 제어 문자 불가 |
 | `kind` | `"audio"`, `"short_video"`, `"post"` |
 | `short_style` | 쇼츠의 `"story"`, `"moment"` 또는 null. 다른 형식에는 null |
-| `duration_seconds` | 게시글은 0. 나머지는 1 이상. `audio` 최대 14400(4시간), `short_video` 최대 180(3분) |
+| `duration_seconds` | 게시글은 0. 나머지는 1 이상. `audio` 최대 1200(20분), `short_video` 최대 180(3분) |
 | `ai_generated` | **필수** `true`/`false`. 모든 콘텐츠가 값을 가짐 |
 | `ai_tool` | 선택. 1~50자. 값이 있으면 `ai_generated`는 `true`여야 함 |
 | `stream_url` | 게시글은 null. 나머지는 `https`만. 계정정보(`user:pw@`)·`#` 불가. 서명용 쿼리(`?sig=...`)는 허용 |
@@ -187,8 +187,10 @@
 다음 API는 매번 DB에서 관리자 역할을 확인합니다. 최초 관리자 지정은 기존 CLI에서만 가능합니다.
 
 - `GET /v1/admin/contents?status=pending&limit=20&cursor=...`: 상태별 목록, 최대 limit 50, 신고 수·revision 포함. status는 pending/approved/rejected/removed.
-- `GET /v1/admin/contents/{id}`: 제출 명세·소유 채널·revision·신고 사유별 건수·최근 심사 이력 50건. 비공개 R2의 원본 object_key는 노출하지 않고 상대 `media_url`만 제공합니다.
-- `POST /v1/admin/contents/{id}/review`: `{action,revision,reason?,file_reviewed?,rights_reviewed?,metadata_reviewed?}`. action은 approve/reject/remove. approve는 세 가지 확인이 모두 true여야 하며 pending만 가능. reject는 pending만, remove는 pending/approved만. reject/remove 사유는 1~200자. 확인한 revision과 현재 상태가 바뀌면 409. 성공 204와 같은 트랜잭션에서 심사 이력을 기록합니다.
+- `GET /v1/admin/contents/{id}`: 제출 명세·소유 채널·revision·신고 사유별 건수·최근 심사 이력 50건과 미디어 검사 상태 `validation_status`(`pending`/`passed`/`failed`), 실패 코드 `validation_failure_code`(실패가 아니면 null). 비공개 R2의 원본 object_key는 노출하지 않고 상대 `media_url`만 제공합니다. 관리자의 `media_url` 미리 재생은 `validation_status`가 `passed`일 때만 가능하고 아니면 404입니다. 크리에이터 본인 미리 재생은 검사 상태와 무관합니다.
+- `POST /v1/admin/contents/{id}/review`: `{action,revision,reason?,file_reviewed?,rights_reviewed?,metadata_reviewed?}`. action은 approve/reject/remove. approve는 세 가지 확인이 모두 true여야 하며 pending만 가능하고, 미디어 검사를 통과(`passed`)해야 합니다. 통과 전 승인은 `409 {"error":"validation_required"}`. reject는 pending만, remove는 pending/approved만. reject/remove 사유는 1~200자. 확인한 revision과 현재 상태가 바뀌면 `409 {"error":"revision_conflict"}`. 성공 204와 같은 트랜잭션에서 심사 이력을 기록합니다.
+
+공개 목록·상세·미디어·주변 탐색·게시글의 오디오 연결·신고 대상은 `approved`이면서 미디어 검사를 통과한 콘텐츠만 다룹니다. 승인 뒤 검사 상태가 `passed`가 아니게 되면 즉시 공개 경로에서 빠집니다.
 - `GET /v1/admin/user?id=사용자id`: 계정 ID·역할·creator_id·가입 시각만 조회. Google sub·이메일·이름은 응답하지 않습니다.
 - `POST /v1/admin/creators/{user_id}`: `{action:"approve",creator_id}` 또는 `{action:"revoke"}`. 최초 creator_id는 유지하며 관리자 지정/관리자 강등은 지원하지 않습니다. 충돌 409, 성공 204.
 
@@ -202,17 +204,36 @@
 | 401 | 로그인 필요 또는 토큰 만료 |
 | 403 | 권한 없음 (예: 승인되지 않은 크리에이터) |
 | 404 | 대상 없음 |
-| 409 | 업로드 주소 사용됨 또는 파일 전송 미완료 |
+| 409 | 업로드 주소 사용됨 또는 파일 전송 미완료. 승인 API는 `revision_conflict`(버전·상태 변경)와 `validation_required`(미디어 검사 미통과)를 구분 |
 | 410 | 업로드 만료 |
 | 411 | 파일 전송의 Content-Length 필요 |
 | 413 | 파일 크기 상한 초과 |
 | 416 | 재생 Range가 올바르지 않음 |
-| 429 | 유효한 미완료 업로드 상한 초과 (`Retry-After` 헤더) |
+| 429 | `rate_limited`: 요청 제한 초과(모든 `/v1` 경로 공통, `Retry-After: 60`). 그 밖에 업로드 상한 초과(`Retry-After` 헤더)와 신고 상한 `limit_reached` |
 | 5xx | 서버 오류 |
 
 ```json
 { "error": "invalid_request" }
 ```
+
+### 요청 제한 (429 `rate_limited`)
+
+모든 `/v1` 요청은 핸들러보다 먼저 그룹별로 1분 단위 요청 수를 셉니다. 넘으면 `429 {"error":"rate_limited"}`와 `Retry-After: 60`을 돌려줍니다.
+로그인 상태(유효한 접근 토큰·웹 세션)면 사용자별로, 아니면 접속 IP별로 셉니다(IPv6는 /64 단위). `/healthz`와 웹 정적 자산은 세지 않습니다.
+공유 IP를 고려해 로그인하지 않은 요청은 일부 그룹에서 더 높은 한도를 씁니다.
+
+| 그룹 | 1분 한도 (사용자 / IP) | 대상 |
+|---|---|---|
+| auth | 10 | `POST /v1/auth/google`, `POST /v1/web/session` |
+| search | 30 / 120 | `GET /v1/contents?q=` |
+| nearby | 30 / 120 | `POST /v1/discovery/nearby` |
+| read | 120 / 600 | 그 밖의 조회(목록·상세, `/v1/me`, 구독·차단 목록, 업로드 상태) |
+| media | 300 / 1200 | `GET`·`HEAD .../media` |
+| write | 30 | 그 밖의 쓰기(신고, 구독·차단 변경, 콘텐츠 수정·게시, 계정 삭제, 약관 수락, 로그아웃) |
+| upload | 20 | 업로드 생성, 파일 PUT, 완료, 취소 |
+| admin | 60 | `/v1/admin/*` 전체 |
+
+한도 수치는 운영 중 바뀔 수 있으므로 클라이언트는 고정값에 의존하지 말고 `Retry-After`를 따릅니다.
 
 ## 아직 정하지 않은 것
 

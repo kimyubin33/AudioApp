@@ -18,8 +18,10 @@ let importController:AbortController|null=null;
 let previewUrl:string|null=null,saveTimer:ReturnType<typeof setTimeout>|undefined,saveQueue=Promise.resolve();
 const channel=typeof BroadcastChannel==='undefined'?null:new BroadcastChannel('audioapp-creator');
 const statusName:Json={pending:'검수 대기',approved:'공개 중',rejected:'반려',removed:'공개 중단'};
+const validationName:Json={pending:'검사 대기',passed:'검사 통과',failed:'검사 실패'};
 const errorName:Json={format_unavailable:'현재 출시 버전은 오디오만 지원합니다.',policy_required:'최신 이용약관을 확인하고 다시 동의해 주세요.',policy_unavailable:'운영 약관이 준비되지 않았습니다. 운영자에게 문의해 주세요.',account_deleting:'계정 삭제를 처리 중입니다. 처리가 끝난 뒤 이용해 주세요.',account_mismatch:'현재 로그인한 계정과 같은 Google 계정으로 확인해 주세요.',unauthorized:'로그인이 필요합니다. 초안은 보관되어 있습니다.',forbidden:'이 작업을 할 권한이 없습니다.',
  revision_conflict:'정보나 상태가 변경되었습니다. 새로 불러온 내용을 확인해 주세요.',invalid_origin:'요청 원점을 확인해 주세요.',
+ validation_required:'미디어 검사를 통과하지 않아 승인할 수 없습니다. 검사 결과를 확인한 뒤 다시 시도해 주세요.',
  invalid_request:'입력 항목을 확인해 주세요.',review_required:'파일·권리·메타데이터 확인을 마쳐 주세요.',creator_conflict:'크리에이터 ID 또는 현재 권한 상태가 맞지 않습니다.',
  upload_expired:'업로드가 만료되었습니다. 상태를 확인한 뒤 다시 제출해 주세요.',limit_reached:'진행 중인 업로드가 많습니다. 잠시 후 다시 시도해 주세요.',
  upload_daily_count_exceeded:'최근 24시간의 업로드 건수 한도에 도달했습니다. 초안은 보관됩니다. 최대 24시간 뒤 다시 시도해 주세요.',
@@ -71,7 +73,7 @@ function readMedia(file:File,signal?:AbortSignal):Promise<{duration:number;width
   const timer=setTimeout(()=>finish(new Error('미디어 정보를 읽는 시간이 초과되었습니다.')),20_000);
   function finish(error?:Error){clearTimeout(timer);signal?.removeEventListener('abort',abort);media.onerror=null;media.onloadedmetadata=null;media.removeAttribute('src');media.load();URL.revokeObjectURL(url);if(error)reject(error);}
   media.preload='metadata';media.onloadedmetadata=()=>{const duration=Math.ceil(media.duration),video=media as HTMLVideoElement;
-   if(!Number.isFinite(duration)||duration<1||duration>(file.type==='video/mp4'?180:14400)){finish(new Error('오디오는 4시간, 쇼츠는 3분 이내여야 합니다.'));return;}
+   if(!Number.isFinite(duration)||duration<1||duration>(file.type==='video/mp4'?180:1200)){finish(new Error('오디오는 20분, 쇼츠는 3분 이내여야 합니다.'));return;}
    if(file.type==='video/mp4'&&(video.videoWidth<1||video.videoHeight<1)){finish(new Error('MP4 쇼츠에는 영상 트랙이 필요합니다. 오디오 파일은 M4A로 선택해 주세요.'));return;}
    if(file.type!=='video/mp4'&&(video.videoWidth>0||video.videoHeight>0)){finish(new Error('오디오 파일에 영상 트랙이 포함되어 있습니다. 오디오만 내보낸 파일을 선택해 주세요.'));return;}
    const result={duration,width:video.videoWidth??0,height:video.videoHeight??0};finish();resolve(result);};
@@ -382,7 +384,9 @@ async function showReview(id:string,target:HTMLElement,reload:()=>Promise<void>)
  const data=await api('/v1/admin/contents/'+id);
  if(!target.isConnected||target.dataset.generation!==generation)return;
  target.replaceChildren();target.scrollIntoView({behavior:'smooth',block:'start'});
- target.append(node('h2',data.title),factList([['콘텐츠 ID',data.id],['크리에이터',data.creator_id],['상태',statusName[data.status]],['검토 버전',data.revision],
+ const validated=data.validation_status==='passed';
+ target.append(node('h2',data.title),factList([['콘텐츠 ID',data.id],['크리에이터',data.creator_id],['상태',statusName[data.status]],
+  ['미디어 검사',(validationName[data.validation_status]??data.validation_status)+(data.validation_failure_code?' ('+data.validation_failure_code+')':'')],['검토 버전',data.revision],
   ['제출된 재생 길이',data.duration_seconds+'초'],['종류',data.kind==='post'?'게시글':data.kind==='audio'?'오디오':data.short_style==='moment'?'Moment':data.short_style==='story'?'Story':'쇼츠'],['AI 표시',data.ai_generated?'AI 생성':'표시 없음'],['AI 도구',data.ai_tool]]));
  const submission=data.submission_json?JSON.parse(data.submission_json):null;
  if(submission){target.append(node('h3','정확한 원본 파일'),factList([['파일 이름',submission.file?.name??'텍스트 게시글'],['크기',submission.file?formatBytes(submission.file.size):'—'],['SHA-256',submission.file?.sha256]]),
@@ -393,10 +397,12 @@ async function showReview(id:string,target:HTMLElement,reload:()=>Promise<void>)
    ['장소 반경',submission.location?submission.location.radius_meters+'m':null],['캐릭터',submission.location?.character],['장소 이야기',submission.location?.story],
    ['공개 장소 확인',submission.location?.public_location_confirmed]]));}
  let played=data.kind==='post'&&!data.media_url,fileReviewed=false,rightsReviewed=false,metadataReviewed=false,approveButton:HTMLButtonElement|null=null;
- const updateApproval=()=>{if(approveButton)approveButton.disabled=(!data.media_url&&data.kind!=='post')||!played||!fileReviewed||!rightsReviewed||!metadataReviewed;};
+ const updateApproval=()=>{if(approveButton)approveButton.disabled=!validated||(!data.media_url&&data.kind!=='post')||!played||!fileReviewed||!rightsReviewed||!metadataReviewed;};
+ if(!validated)target.append(node('p',data.validation_status==='failed'?'미디어 검사에 실패해 승인할 수 없습니다. 원본 미리 재생도 제공하지 않습니다.':'미디어 검사가 끝나지 않아 아직 승인할 수 없습니다. 검사를 통과하면 원본을 재생해 검수할 수 있습니다.','warning'));
  const checks=node('div');target.append(checks);
  const fileCheck=check(checks,data.kind==='post'?'게시글의 사진과 내용을 확인했습니다.':'원본을 재생해 파일·길이·코덱과 화면·소리를 확인했습니다.',false,v=>{fileReviewed=v;updateApproval();},!played);
- if(data.kind==='post'&&data.media_url){const image=node('img');image.alt=data.title;
+ if(!validated){/* 관리자 미리 재생은 검사 통과 뒤에만 제공된다. */}
+ else if(data.kind==='post'&&data.media_url){const image=node('img');image.alt=data.title;
   image.onload=()=>{played=true;fileCheck.disabled=false;updateApproval();};image.onerror=()=>target.prepend(node('p','사진을 불러오지 못했습니다.','errors'));
   image.src=data.media_url;target.insertBefore(image,checks);
  }else if(data.media_url){const media=node(data.kind==='short_video'?'video':'audio');media.controls=true;media.preload='metadata';media.src=data.media_url;
@@ -409,6 +415,7 @@ async function showReview(id:string,target:HTMLElement,reload:()=>Promise<void>)
  const actions=node('div','','actions');target.append(actions);let deciding=false;
  async function review(action:string){
   if(deciding)return;
+  if(action==='approve'&&!validated)throw new Error(errorName.validation_required);
   if(action==='approve'&&(!played||!fileReviewed||!rightsReviewed||!metadataReviewed))throw new Error('원본을 직접 재생하고 세 가지 확인에 체크해 주세요.');
   if(action!=='approve'&&!cleanText(reason,200))throw new Error('반려·공개 중단 사유를 1~200자로 입력해 주세요.');
   deciding=true;const controls=Array.from(actions.querySelectorAll('button')).map(b=>({b,disabled:b.disabled}));controls.forEach(x=>x.b.disabled=true);

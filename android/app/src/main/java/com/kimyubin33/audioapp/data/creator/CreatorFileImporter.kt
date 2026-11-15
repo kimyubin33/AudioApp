@@ -106,7 +106,7 @@ class CreatorFileImporter(private val context: Context, private val store: Creat
             val mime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE).orEmpty()
             val expected = if (name.endsWith(".mp3", true)) "audio/mpeg" else "audio/mp4"
             if (mime != expected) throw CreatorFileException("확장자와 실제 미디어 형식이 일치하지 않습니다.")
-            if (ms < 1 || ms > 14_400_000L) throw CreatorFileException("오디오는 최대 4시간입니다.")
+            if (ms < 1 || ms > 1_200_000L) throw CreatorFileException("오디오는 최대 20분입니다.")
             file.setReadOnly()
             return CreatorDraft(fileId = id, name = name, source = source, bytes = copied.bytes, sha256 = copied.sha256,
                 durationSeconds = ceil(ms / 1000.0).toInt(), isVideo = false, title = name.substringBeforeLast('.').take(100))

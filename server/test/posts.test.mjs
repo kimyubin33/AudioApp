@@ -4,7 +4,7 @@ import {after,before,beforeEach,test} from 'node:test';
 import {createTestHarness} from 'wrangler';
 import {issueToken} from '../src/auth.ts';
 const secret='post-test-secret-post-test-secret-1234';
-const harness=createTestHarness({workers:[{configPath:'./wrangler.toml',secrets:{TOKEN_SECRET:secret,DEV_MODE:'1',ENABLE_EXTENDED_FORMATS:'1',GOOGLE_CLIENT_ID:'test',API_BASE_URL:'https://api.test'}}]});
+const harness=createTestHarness({workers:[{configPath:'./wrangler.toml',env:'test',secrets:{TOKEN_SECRET:secret,DEV_MODE:'1',ENABLE_EXTENDED_FORMATS:'1',GOOGLE_CLIENT_ID:'test',API_BASE_URL:'https://api.test'}}]});
 const worker=harness.getWorker();let env;const tokens={};
 before(async()=>{await harness.listen();await worker.applyD1Migrations('DB');env=await worker.getEnv();for(const id of ['owner','viewer','admin'])tokens[id]=await issueToken({TOKEN_SECRET:secret},id);});
 after(async()=>harness.close());
@@ -19,7 +19,8 @@ async function call(method,path,{as='owner',body,raw,headers={}}={}){
  if(as)headers.Authorization='Bearer '+tokens[as];if(body!==undefined){headers['Content-Type']='application/json';raw=JSON.stringify(body);}
  return worker.fetch(new URL(path,'https://api.test').href,{method,headers,body:raw,duplex:'half'});
 }
-async function approve(id){const r=await call('POST','/v1/admin/contents/'+id+'/review',{as:'admin',body:{action:'approve',revision:1,file_reviewed:true,rights_reviewed:true,metadata_reviewed:true}});assert.equal(r.status,204,await r.text());}
+// 검사기가 아직 없으므로 승인 전 테스트 데이터에 검사 통과를 표시한다(0013 승인 게이트).
+async function approve(id){await env.DB.prepare("UPDATE contents SET validation_status='passed',validation_version=1 WHERE id=?").bind(id).run();const r=await call('POST','/v1/admin/contents/'+id+'/review',{as:'admin',body:{action:'approve',revision:1,file_reviewed:true,rights_reviewed:true,metadata_reviewed:true}});assert.equal(r.status,204,await r.text());}
 test('게시글: 권한·권리, 중복 방지, 비공개 검수, 게시글 검색과 저장용 상세',async()=>{
  const m=metadata();
  assert.equal((await call('POST','/v1/me/posts',{as:null,body:m})).status,401);
@@ -56,7 +57,7 @@ test('사진 게시글: 해시 검증, 검수 전 비공개, 이미지 MIME과 �
 });
 test('Story/Moment: 혼합 목록, 성격 필터·커서·검색, 구버전 분류 없음',async()=>{
  for(const [id,style,created]of [['v_story','story',4],['v_moment','moment',3],['v_old',null,2]]){
-  await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,external_url,created_at,short_style) VALUES(?,'creator_one',?,'short_video',10,0,'approved','https://example.com/v.mp4',?,?)").bind(id,id,created,style).run();
+  await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,validation_status,external_url,created_at,short_style) VALUES(?,'creator_one',?,'short_video',10,0,'approved','passed','https://example.com/v.mp4',?,?)").bind(id,id,created,style).run();
  }
  const all=await (await call('GET','/v1/contents?kind=short_video&limit=2',{as:null})).json();
  assert.deepEqual(all.items.map(x=>x.short_style),['story','moment']);
@@ -66,7 +67,7 @@ test('Story/Moment: 혼합 목록, 성격 필터·커서·검색, 구버전 분�
  for(const path of ['/v1/contents?short_style=story','/v1/contents?kind=post&short_style=moment','/v1/contents?kind=short_video&short_style=bad'])assert.equal((await call('GET',path,{as:null})).status,400);
 });
 test('오디오 연결은 승인된 오디오만 허용하고 공개 중단을 즉시 반영',async()=>{
- await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,external_url,created_at) VALUES('a','creator_one','a','audio',10,0,'approved','https://example.com/a.mp3',1)").run();
+ await env.DB.prepare("INSERT INTO contents(id,creator_id,title,kind,duration_seconds,ai_generated,status,validation_status,external_url,created_at) VALUES('a','creator_one','a','audio',10,0,'approved','passed','https://example.com/a.mp3',1)").run();
  const m=metadata();m.submission.audio_content_id='missing';
  assert.equal((await call('POST','/v1/me/posts',{body:m})).status,400);
  m.submission.audio_content_id='a';const {content_id:id}=await (await call('POST','/v1/me/posts',{body:m})).json();await approve(id);

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { after, before, beforeEach, test } from 'node:test';
 import { createTestHarness } from 'wrangler';
 import { issueToken } from '../src/auth.ts';
 import { buildCommand } from '../scripts/admin-sql.mjs';
 
 const secret = 'integration-test-secret-integration-test-1234';
-const server = createTestHarness({ workers: [{ configPath: './wrangler.toml',
+const server = createTestHarness({ workers: [{ configPath: './wrangler.toml',env:'test',
   secrets: { TOKEN_SECRET: secret, GOOGLE_CLIENT_ID: 'test.apps.googleusercontent.com', DEV_MODE: '1', ENABLE_EXTENDED_FORMATS: '1', API_BASE_URL: 'https://api.test' } }] });
 const worker = server.getWorker();
 let env;
@@ -32,7 +33,7 @@ before(async () => {
 });
 after(async () => { await server.close(); });
 beforeEach(async () => {
-  for (const table of ['moderation_events', 'reports', 'uploads', 'contents', 'blocks', 'subscriptions', 'users']) await env.DB.prepare('DELETE FROM ' + table).run();
+  for (const table of ['validation_jobs', 'moderation_events', 'reports', 'uploads', 'contents', 'blocks', 'subscriptions', 'users']) await env.DB.prepare('DELETE FROM ' + table).run();
   for (const [id, role, creator] of [['owner', 'creator', 'creator_one'], ['other', 'creator', 'creator_two'], ['viewer', 'user', null], ['admin', 'admin', null]]) {
     await env.DB.prepare('INSERT INTO users (id, google_sub, role, creator_id, created_at) VALUES (?, ?, ?, ?, 1)').bind(id, id, role, creator).run();
   }
@@ -51,7 +52,12 @@ async function create(body = metadata) {
 const put = (u, options = {}) => call('PUT', u.upload_url, { raw: mp3, headers: { 'Content-Type': 'audio/mpeg', 'Content-Length': String(mp3.length) }, ...options });
 const complete = u => call('POST', '/v1/uploads/' + u.upload_id + '/complete');
 async function contentId(u) { return (await env.DB.prepare('SELECT content_id FROM uploads WHERE id = ?').bind(u.upload_id).first()).content_id; }
-async function moderate(command, args) { return env.DB.prepare(buildCommand(command, args).sql).run(); }
+async function moderate(command, args) {
+  const plan = buildCommand(command, args);
+  return plan.statements ? env.DB.batch(plan.statements.map(s => env.DB.prepare(s))) : env.DB.prepare(plan.sql).run();
+}
+// 검사기가 아직 없으므로 승인 전 테스트 데이터는 로컬 개발 명령으로 검사 통과 처리한다.
+const validationPass = id => moderate('validation-pass', [id]);
 
 test('업로드 → 비공개 검수 → 승인 → Range 재생 → 공개 중단', async () => {
   const u = await create();
@@ -62,6 +68,7 @@ test('업로드 → 비공개 검수 → 승인 → Range 재생 → 공개 중�
   assert.equal((await put(u)).status, 409);
   assert.deepEqual(await Promise.all([complete(u), complete(u)]).then(rs => rs.map(r => r.status)), [204, 204]);
   const id = await contentId(u);
+  await validationPass(id);
   const pending = await (await call('GET', '/v1/me/contents')).json();
   assert.equal(pending.items.length, 1);
   assert.equal(pending.items[0].id, id);
@@ -119,14 +126,149 @@ test('인증·소유권·권한 회수는 모든 업로드 단계에 적용', as
   assert.equal((await call('GET', '/v1/me/contents', { as: null })).status, 401);
 });
 
+const jobs = () => env.DB.prepare('SELECT * FROM validation_jobs ORDER BY created_at, job_id').all().then(r => r.results);
+
+test('업로드 완료는 콘텐츠와 검사 작업을 함께 등록하고 재시도해도 작업은 하나', async () => {
+  const u = await create();
+  assert.equal((await put(u)).status, 204);
+  assert.equal((await complete(u)).status, 204);
+  assert.equal((await complete(u)).status, 204);
+  const id = await contentId(u);
+  const list = await jobs();
+  assert.equal(list.length, 1);
+  const [job] = list;
+  const content = await env.DB.prepare('SELECT validation_status, validation_job_id FROM contents WHERE id = ?').bind(id).first();
+  assert.equal(content.validation_job_id, job.job_id);
+  assert.equal(content.validation_status, 'pending');
+  assert.equal(job.content_id, id);
+  assert.equal(job.state, 'pending_publish');
+  assert.equal(job.attempts, 0);
+  assert.equal(job.validator_version, 1);
+  assert.equal(job.object_key, 'uploads/' + u.upload_id);
+  assert.equal(job.source_sha256, metadata.submission.file.sha256);
+  assert.ok(job.next_attempt_at >= job.created_at && job.updated_at === job.created_at);
+  // 관리자 공개 중단은 진행 중 작업을 취소한다.
+  await moderate('remove', [id, '검사 전 중단']);
+  const [cancelled] = await jobs();
+  assert.equal(cancelled.state, 'cancelled');
+  assert.ok(cancelled.updated_at >= job.updated_at);
+});
+
+test('콘텐츠가 생기지 않으면 검사 작업도 없고, 제출 명세가 없으면 완료를 거부', async () => {
+  const revoked = await create();
+  assert.equal((await put(revoked)).status, 204);
+  await moderate('demote', ['owner']);
+  assert.equal((await complete(revoked)).status, 403);
+  await moderate('promote', ['owner', 'creator_one']);
+  const expired = await create();
+  assert.equal((await put(expired)).status, 204);
+  await env.DB.prepare('UPDATE uploads SET expires_at = 1 WHERE id = ?').bind(expired.upload_id).run();
+  assert.equal((await complete(expired)).status, 410);
+  // 인증 뒤 batch 직전에 크리에이터 연결이 바뀐 경우: batch 조건으로 콘텐츠·작업 모두 생성되지 않는다.
+  const raced = await create();
+  assert.equal((await put(raced)).status, 204);
+  await env.DB.prepare("UPDATE users SET creator_id = 'creator_moved' WHERE id = 'owner'").run();
+  assert.equal((await complete(raced)).status, 409);
+  await env.DB.prepare("UPDATE users SET creator_id = 'creator_one' WHERE id = 'owner'").run();
+  const noSubmission = await create();
+  assert.equal((await put(noSubmission)).status, 204);
+  await env.DB.prepare('UPDATE uploads SET submission_json = NULL WHERE id = ?').bind(noSubmission.upload_id).run();
+  assert.equal((await complete(noSubmission)).status, 400);
+  await env.DB.prepare("UPDATE uploads SET submission_json = '{\"file\":{}}' WHERE id = ?").bind(noSubmission.upload_id).run();
+  assert.equal((await complete(noSubmission)).status, 400);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM contents').first()).n, 0);
+  assert.equal((await jobs()).length, 0);
+});
+
+test('이미 끝난 검사 작업은 공개 중단돼도 바뀌지 않는다', async () => {
+  const u = await create();
+  assert.equal((await put(u)).status, 204);
+  assert.equal((await complete(u)).status, 204);
+  const id = await contentId(u);
+  const [job] = await jobs();
+  await env.DB.prepare("UPDATE validation_jobs SET state = 'passed', updated_at = 5 WHERE job_id = ?").bind(job.job_id).run();
+  await env.DB.prepare("INSERT INTO validation_jobs (job_id, content_id, object_key, source_sha256, validator_version, state, failure_code, created_at, updated_at) VALUES ('old_failed', ?, ?, ?, 1, 'failed', 'corrupt', 1, 5)")
+    .bind(id, job.object_key, job.source_sha256).run();
+  await moderate('remove', [id, '중단']);
+  assert.deepEqual((await jobs()).map(j => [j.state, j.updated_at]).sort(), [['failed', 5], ['passed', 5]]);
+});
+
+test('승인 게이트: 검사 통과 전 API·CLI 승인 거부, 통과 후 공개, 실패로 바뀌면 즉시 비공개', async () => {
+  const u = await create(); await put(u); await complete(u);
+  const id = await contentId(u);
+  const approveBody = { action: 'approve', revision: 1, file_reviewed: true, rights_reviewed: true, metadata_reviewed: true };
+  const approve = (body = approveBody) => call('POST', '/v1/admin/contents/' + id + '/review', { as: 'admin', body });
+  const status = async () => (await env.DB.prepare('SELECT status, validation_status FROM contents WHERE id = ?').bind(id).first());
+  const listed = async () => (await (await call('GET', '/v1/contents', { as: null })).json()).items.some(x => x.id === id);
+  const preview = as => call('GET', '/v1/me/contents/' + id + '/media', { as });
+  // a. pending·failed에서는 API(409 validation_required, 버전 충돌과 구분)와 CLI 승인 모두 거부
+  let res = await approve();
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), { error: 'validation_required' });
+  res = await approve({ ...approveBody, revision: 9 });
+  assert.deepEqual(await res.json(), { error: 'revision_conflict' });
+  await assert.rejects(moderate('approve', [id, '1']), /validation_required/);
+  // d. 검사 전: 관리자 미리 재생 404, 본인 미리 재생 200
+  assert.equal((await preview('admin')).status, 404);
+  assert.equal((await preview('owner')).status, 200);
+  await env.DB.prepare("UPDATE contents SET validation_status = 'failed', validation_failure_code = 'codec' WHERE id = ?").bind(id).run();
+  assert.equal((await approve()).status, 409);
+  const failedDetail = await (await call('GET', '/v1/admin/contents/' + id, { as: 'admin' })).json();
+  assert.equal(failedDetail.validation_status, 'failed');
+  assert.equal(failedDetail.validation_failure_code, 'codec');
+  assert.deepEqual(await status(), { status: 'pending', validation_status: 'failed' });
+  // b. passed면 승인되고 목록·상세·미디어에 노출
+  await validationPass(id);
+  const passedDetail = await (await call('GET', '/v1/admin/contents/' + id, { as: 'admin' })).json();
+  assert.equal(passedDetail.validation_status, 'passed');
+  assert.equal(passedDetail.validation_failure_code, null);
+  assert.equal((await preview('admin')).status, 200);
+  assert.equal((await approve()).status, 204);
+  assert.equal(await listed(), true);
+  assert.equal((await call('GET', '/v1/contents/' + id, { as: null })).status, 200);
+  assert.equal((await call('GET', '/v1/contents/' + id + '/media', { as: null })).status, 200);
+  // c. approved 상태에서 검사 실패로 바뀌면 목록·상세·미디어에서 즉시 사라진다
+  await env.DB.prepare("UPDATE contents SET validation_status = 'failed', validation_failure_code = 'corrupt' WHERE id = ?").bind(id).run();
+  assert.deepEqual(await status(), { status: 'approved', validation_status: 'failed' });
+  assert.equal(await listed(), false);
+  assert.equal((await call('GET', '/v1/contents/' + id, { as: null })).status, 404);
+  assert.equal((await call('GET', '/v1/contents/' + id + '/media', { as: null })).status, 404);
+  // d. 검사 실패 뒤: 관리자 미리 재생 404, 본인 미리 재생은 계속 200
+  assert.equal((await preview('admin')).status, 404);
+  assert.equal((await preview('owner')).status, 200);
+});
+
+test('승인 게이트: 외부 URL 콘텐츠는 검사 작업이 없어 통과·승인되지 않고, 직접 approved 삽입도 거부', async () => {
+  await env.DB.prepare("INSERT INTO contents (id, creator_id, title, kind, duration_seconds, ai_generated, status, external_url, created_at) VALUES ('ext', 'creator_one', 'x', 'audio', 10, 0, 'pending', 'https://example.com/x.mp3', 1)").run();
+  const [jobsResult, contentResult] = await validationPass('ext');
+  assert.equal(jobsResult.results.length + contentResult.results.length, 0);
+  assert.equal((await env.DB.prepare("SELECT validation_status FROM contents WHERE id = 'ext'").first()).validation_status, 'pending');
+  const res = await call('POST', '/v1/admin/contents/ext/review', { as: 'admin',
+    body: { action: 'approve', revision: 1, file_reviewed: true, rights_reviewed: true, metadata_reviewed: true } });
+  assert.deepEqual([res.status, await res.json()], [409, { error: 'validation_required' }]);
+  await assert.rejects(env.DB.prepare("INSERT INTO contents (id, creator_id, title, kind, duration_seconds, ai_generated, status, external_url, created_at) VALUES ('ext2', 'creator_one', 'x', 'audio', 10, 0, 'approved', 'https://example.com/x.mp3', 1)").run(), /validation_required/);
+});
+
+test('validation-pass 개발 명령은 로컬 DB 전용이며 원격 옵션을 거부한다', () => {
+  const run = (...args) => spawnSync(process.execPath, ['scripts/admin.mjs', 'validation-pass', ...args], { encoding: 'utf8', timeout: 30_000 });
+  const remote = run('c_any', '--remote', '--yes');
+  assert.equal(remote.status, 2, remote.stderr);
+  assert.match(remote.stderr, /로컬 개발 DB 전용/);
+  assert.equal(run('c_any', '--remote=1').status, 2);
+  assert.throws(() => buildCommand('validation-pass', ['c_any', '--remote']));
+  assert.throws(() => buildCommand('validation-pass', ["x';--"]));
+  assert.equal(buildCommand('validation-pass', ['c_any']).localOnly, true);
+});
+
 test('메타데이터, MIME, 크기, 토큰, 만료 검증', async () => {
   for (const bad of [
     { title: '' }, { title: '가'.repeat(101) }, { title: 'a\nb' }, { kind: 'podcast' },
-    { duration_seconds: 0 }, { duration_seconds: 1.5 }, { duration_seconds: 14401 },
+    { duration_seconds: 0 }, { duration_seconds: 1.5 }, { duration_seconds: 1201 },
     { ai_generated: 'true' }, { ai_generated: false }, { ai_tool: '' },
     { kind: 'audio', content_type: 'video/mp4' }, { kind: 'short_video', content_type: 'audio/mp4' },
     { kind: 'short_video', content_type: 'video/mp4', duration_seconds: 181 }, { content_type: 'text/html' },
   ]) assert.equal((await call('POST', '/v1/uploads', { body: { ...metadata, ...bad } })).status, 400, JSON.stringify(bad));
+  await create({ ...metadata, duration_seconds: 1200 }); // 오디오 최대 20분 경계
   const u = await create();
   const wrong = new URL(u.upload_url); wrong.searchParams.set('token', '0'.repeat(64));
   assert.equal((await put({ ...u, upload_url: wrong.href })).status, 403);
@@ -247,6 +389,7 @@ test('제출 정보 수정·반려 후 재검수와 오래된 버전 승인 방�
   await moderate('reject', [id, '출처 보완']);
   assert.equal((await call('PATCH', path, { body: { ...changed, revision: 2 } })).status, 204);
   assert.equal((await call('PATCH', path, { body: { ...changed, revision: 3, submission: submissionFor(mp4) } })).status, 400);
+  await validationPass(id);
   await moderate('approve', [id, '3']);
   assert.equal((await call('PATCH', path, { body: { ...changed, revision: 3 } })).status, 409);
   assert.equal((await call('DELETE', '/v1/uploads/' + u.upload_id)).status, 409);
@@ -267,6 +410,7 @@ test('검색은 승인 콘텐츠의 공개 필드만 검색하고 차단·와일
   const id = await contentId(u);
   const query = async (q, as = null) => (await (await call('GET', '/v1/contents?q=' + encodeURIComponent(q), { as })).json()).items;
   assert.equal((await query('숲의 소리')).length, 0);
+  await validationPass(id);
   await moderate('approve', [id, '1']);
   for (const q of ['숲의 소리', '달빛태그', '장소검색공원', '지역캐릭터', '100%']) assert.equal((await query(q)).length, 1, q);
   assert.equal((await query('비공개권리자')).length, 0);
@@ -285,9 +429,9 @@ async function placeContent(id, lat, lon, status = 'approved', extra = {}) {
   submission.location = { name: '공원', latitude: lat, longitude: lon, radius_meters: 200,
     character: '달빛', story: '강가의 이야기', public_location_confirmed: true };
   await env.DB.prepare(`INSERT INTO contents
-    (id, creator_id, title, kind, duration_seconds, ai_generated, ai_tool, status, external_url, created_at, submission_json)
-    VALUES (?, 'creator_one', ?, 'audio', 120, 1, 'test', ?, 'https://example.com/test.mp3', 1, ?)`)
-    .bind(id, '위치 작품 ' + id, status, JSON.stringify({ ...submission, ...extra })).run();
+    (id, creator_id, title, kind, duration_seconds, ai_generated, ai_tool, status, validation_status, external_url, created_at, submission_json)
+    VALUES (?, 'creator_one', ?, 'audio', 120, 1, 'test', ?, ?, 'https://example.com/test.mp3', 1, ?)`)
+    .bind(id, '위치 작품 ' + id, status, status === 'approved' ? 'passed' : 'pending', JSON.stringify({ ...submission, ...extra })).run();
 }
 test('주변 검색: 승인·차단·거리 필터와 비공개 권리 정보 분리, 승인 회수 즉시 반영', async () => {
   await placeContent('near', 37.5, 127);
@@ -358,7 +502,7 @@ test('웹 세션: HttpOnly 쿠키, CSRF·교차 원점 차단, 앱/웹 원점 �
   assert.equal(remoteDev.status,401);
 });
 test('웹 검수: 관리자만 접근, 버전 충돌·확인 누락 방지, 공개 중단과 웹/CLI 심사 이력',async()=>{
-  const u=await create();await put(u);await complete(u);const id=await contentId(u);
+  const u=await create();await put(u);await complete(u);const id=await contentId(u);await validationPass(id);
   for(const as of [null,'owner','viewer'])assert.equal((await call('GET','/v1/admin/contents',{as})).status,as?403:401);
   assert.equal((await call('GET','/v1/admin/contents',{as:'admin'})).status,200);
   const changed={...metadata,title:'새 버전',revision:1};

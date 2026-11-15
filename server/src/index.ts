@@ -15,6 +15,8 @@ import { completeUpload, createUpload, putUpload, listMyContents, serveMedia, cl
 import { creatorProfile, uploadStatus, cancelUpload, editCreatorContent } from './creator';
 import { nearbyContents } from './nearby';
 import { createPost } from './posts';
+import { rateLimited } from './rate-limit';
+import { sweepValidationJobs } from './validation-results';
 import type { AppEnv } from './types';
 import {
   DETAIL_MAX,
@@ -97,8 +99,8 @@ async function listContents(request: Request, env: AppEnv): Promise<Response> {
   const subscribedOnly = subscribedRaw === '1';
   if (subscribedOnly && !user) throw new HttpError(401, 'unauthorized');
 
-  // 공개(approved)된 것만. 로그인한 사용자가 차단한 크리에이터의 콘텐츠는 뺀다.
-  const where = ["c.status = 'approved'"];
+  // 공개(approved)되고 미디어 검사를 통과한 것만. 로그인한 사용자가 차단한 크리에이터의 콘텐츠는 뺀다.
+  const where = ["c.status = 'approved'", "c.validation_status = 'passed'"];
   if (!extendedFormats(env)) where.push("c.kind = 'audio'");
   const binds: (string | number)[] = [];
   const query = params.get('q');
@@ -155,7 +157,7 @@ async function contentDetail(id: string, request: Request, env: AppEnv): Promise
   if (!isValidId(id)) throw new HttpError(400, 'invalid_request');
   const row = await env.DB.prepare(
     `SELECT id, creator_id, title, kind, duration_seconds, ai_generated, ai_tool, created_at, object_key, external_url, short_style, submission_json
-       FROM contents WHERE id = ?1 AND status = 'approved'
+       FROM contents WHERE id = ?1 AND status = 'approved' AND validation_status = 'passed'
        AND (?2 IS NULL OR NOT EXISTS(SELECT 1 FROM blocks b WHERE b.user_id=?2 AND b.creator_id=contents.creator_id))`,
   )
     .bind(id,user?.id??null)
@@ -166,7 +168,7 @@ async function contentDetail(id: string, request: Request, env: AppEnv): Promise
   const submission = publicSubmission(row);
   let audioId: string | null = null;
   if (row.kind==='post'&&isValidId(submission.audio_content_id)) {
-    const audio=await env.DB.prepare(`SELECT id FROM contents c WHERE id=? AND kind='audio' AND status='approved'
+    const audio=await env.DB.prepare(`SELECT id FROM contents c WHERE id=? AND kind='audio' AND status='approved' AND validation_status='passed'
       AND (? IS NULL OR NOT EXISTS(SELECT 1 FROM blocks b WHERE b.user_id=? AND b.creator_id=c.creator_id))`)
       .bind(submission.audio_content_id,user?.id??null,user?.id??null).first<{id:string}>();
     audioId=audio?.id??null;
@@ -310,12 +312,18 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
 
 export default {
   async scheduled(_event: ScheduledController, env: AppEnv): Promise<void> {
-    await processAccountDeletions(env);
-    await cleanupUploads(env);
+    // 세 정리 작업은 서로 실패를 전파하지 않는다. 하나라도 실패하면 모두 실행한 뒤 cron을 실패로 남긴다.
+    let failed = 0;
+    for (const [name, task] of [
+      ['account-deletion', processAccountDeletions], ['upload-cleanup', cleanupUploads], ['validation-sweep', sweepValidationJobs],
+    ] as const) {
+      try { await task(env); } catch (e) { failed++; console.error('scheduled task failed', name, e instanceof Error ? e.name : 'unknown'); }
+    }
+    if (failed) throw new Error('scheduled tasks failed: ' + failed);
   },
   async fetch(request: Request, env: AppEnv): Promise<Response> {
     try {
-      return await route(request, env);
+      return (await rateLimited(request, env)) ?? await route(request, env);
     } catch (e) {
       if (e instanceof HttpError) return json(e.status, { error: e.code });
       // 입력 내용이 섞일 수 있으니 오류 이름만 기록한다
