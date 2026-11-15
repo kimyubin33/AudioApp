@@ -16,6 +16,7 @@ import { creatorProfile, uploadStatus, cancelUpload, editCreatorContent } from '
 import { nearbyContents } from './nearby';
 import { createPost } from './posts';
 import { rateLimited } from './rate-limit';
+import { sweepValidationJobs } from './validation-results';
 import type { AppEnv } from './types';
 import {
   DETAIL_MAX,
@@ -311,8 +312,14 @@ async function route(request: Request, env: AppEnv): Promise<Response> {
 
 export default {
   async scheduled(_event: ScheduledController, env: AppEnv): Promise<void> {
-    await processAccountDeletions(env);
-    await cleanupUploads(env);
+    // 세 정리 작업은 서로 실패를 전파하지 않는다. 하나라도 실패하면 모두 실행한 뒤 cron을 실패로 남긴다.
+    let failed = 0;
+    for (const [name, task] of [
+      ['account-deletion', processAccountDeletions], ['upload-cleanup', cleanupUploads], ['validation-sweep', sweepValidationJobs],
+    ] as const) {
+      try { await task(env); } catch (e) { failed++; console.error('scheduled task failed', name, e instanceof Error ? e.name : 'unknown'); }
+    }
+    if (failed) throw new Error('scheduled tasks failed: ' + failed);
   },
   async fetch(request: Request, env: AppEnv): Promise<Response> {
     try {

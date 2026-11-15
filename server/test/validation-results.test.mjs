@@ -9,9 +9,10 @@ import { createTestHarness } from 'wrangler';
 
 // src는 확장자 없는 import라 번들해서 불러온다. DB는 하네스의 실제 로컬 D1을 쓴다.
 const outDir = mkdtempSync(join(tmpdir(), 'validation-results-'));
-await build({ entryPoints: ['src/validation-results.ts'], bundle: true, format: 'esm', platform: 'neutral',
-  outfile: join(outDir, 'vr.mjs'), logLevel: 'error' });
-const { claimValidationJob, applyValidationResult } = await import(pathToFileURL(join(outDir, 'vr.mjs')));
+await build({ entryPoints: { vr: 'src/validation-results.ts', index: 'src/index.ts' }, bundle: true, format: 'esm', platform: 'neutral',
+  outdir: outDir, outExtension: { '.js': '.mjs' }, logLevel: 'error' });
+const { claimValidationJob, applyValidationResult, sweepValidationJobs, VALIDATION_SWEEP_LIMIT } = await import(pathToFileURL(join(outDir, 'vr.mjs')));
+const { default: bundledWorker } = await import(pathToFileURL(join(outDir, 'index.mjs')));
 rmSync(outDir, { recursive: true, force: true });
 
 const harness = createTestHarness({ workers: [{ configPath: './wrangler.toml', env: 'test',
@@ -123,7 +124,7 @@ test('stale: 원본 해시·검사기 버전이 다르거나 현재 작업이 �
 test('잘못된 입력은 예외로 거부', async () => {
   await seed();
   for (const bad of [{ failure_code: 'codec' }, { result: 'failed', failure_code: null }, { result: 'retry' },
-    { result: 'failed', failure_code: 'unknown' }, { result: 'maybe' }, { source_sha256: 'A'.repeat(64) },
+    { result: 'failed', failure_code: 'unknown' }, { result: 'retry', failure_code: 'codec' }, { result: 'retry', failure_code: 'corrupt' }, { result: 'maybe' }, { source_sha256: 'A'.repeat(64) },
     { validator_version: 0 }, { validator_version: 1.5 }, { job_id: '' }]) {
     await assert.rejects(apply(bad), TypeError, JSON.stringify(bad));
   }
@@ -187,4 +188,77 @@ test('같은 결과가 동시에 두 번 오면 applied 하나, already_applied 
   const outcomes = await Promise.all([apply(), apply()]);
   assert.deepEqual([...outcomes].sort(), ['already_applied', 'applied']);
   assert.equal((await contentRow()).validation_status, 'passed');
+});
+
+// ───────────────────────── cron 정리 ─────────────────────────
+
+const sweep = () => sweepValidationJobs({ DB: env.DB });
+const touch = (job) => env.DB.prepare('UPDATE validation_jobs SET updated_at = unixepoch() WHERE job_id = ?').bind(job).run();
+
+test('정리: 15분 넘게 멈춘 running은 재대기(pending_publish/timeout), 최근 running은 그대로', async () => {
+  await seed(); // updated_at = 1 → 멈춘 작업
+  await seed({ id: 'c2', job: 'vj_fresh' });
+  await touch('vj_fresh');
+  assert.deepEqual(await sweep(), { stuck: 1, exhausted: 0 });
+  const j = await jobRow();
+  assert.deepEqual([j.state, j.failure_code, j.next_attempt_at - j.updated_at], ['pending_publish', 'timeout', 60]);
+  assert.equal((await contentRow()).validation_status, 'pending');
+  assert.equal((await jobRow('vj_fresh')).state, 'running');
+});
+
+test('정리: 상한에 도달한 running·queued·pending_publish는 failed/timeout 확정, 콘텐츠도 failed', async () => {
+  await seed({ attempts: 3 });
+  await seed({ id: 'c2', job: 'vj_2', state: 'queued', attempts: 3 });
+  await seed({ id: 'c3', job: 'vj_3', state: 'pending_publish', attempts: 3 });
+  await seed({ id: 'c4', job: 'vj_4', state: 'queued', attempts: 2 }); // 상한 전: 그대로
+  assert.deepEqual(await sweep(), { stuck: 1, exhausted: 2 });
+  for (const [job, id] of [['vj_1', 'c1'], ['vj_2', 'c2'], ['vj_3', 'c3']]) {
+    const j = await jobRow(job), c = await contentRow(id);
+    assert.deepEqual([j.state, j.failure_code, c.validation_status, c.validation_failure_code, c.status], ['failed', 'timeout', 'failed', 'timeout', 'pending'], job);
+  }
+  assert.deepEqual([(await jobRow('vj_4')).state, (await contentRow('c4')).validation_status], ['queued', 'pending']);
+});
+
+test('정리: 이미 끝난 작업과 cancelled 작업은 건드리지 않는다', async () => {
+  await seed({ state: 'passed', attempts: 3, validation: 'passed' });
+  await seed({ id: 'c2', job: 'vj_2', state: 'failed', attempts: 3 });
+  await seed({ id: 'c3', job: 'vj_3', state: 'cancelled', attempts: 3, status: 'removed' });
+  const rows = async () => (await env.DB.prepare('SELECT * FROM validation_jobs ORDER BY job_id').all()).results.map((r) => ({ ...r }));
+  const before = await rows();
+  assert.deepEqual(await sweep(), { stuck: 0, exhausted: 0 });
+  assert.deepEqual(await rows(), before);
+  assert.equal((await contentRow()).validation_status, 'passed');
+});
+
+test('정리: 한 번에 최대 100건', async () => {
+  const n = VALIDATION_SWEEP_LIMIT + 5;
+  const stmts = [];
+  for (let i = 0; i < n; i++) {
+    const id = 'c' + i, job = 'vj_' + i, exhausted = i >= 60; // 멈춘 running 60건 + 상한 도달 queued 45건
+    stmts.push(env.DB.prepare(`INSERT INTO contents (id, creator_id, title, kind, duration_seconds, ai_generated, object_key, validation_job_id, created_at)
+      VALUES (?1, 'creator_one', ?1, 'audio', 10, 0, ?2, ?3, 1)`).bind(id, 'objects/' + id, job));
+    stmts.push(env.DB.prepare(`INSERT INTO validation_jobs (job_id, content_id, object_key, source_sha256, validator_version, state, attempts, created_at, updated_at)
+      VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, 1, 1)`).bind(job, id, 'objects/' + id, SHA, exhausted ? 'queued' : 'running', exhausted ? 3 : 1));
+  }
+  await env.DB.batch(stmts);
+  assert.equal(VALIDATION_SWEEP_LIMIT, 100);
+  assert.deepEqual(await sweep(), { stuck: 60, exhausted: 40 });
+  const left = await env.DB.prepare("SELECT COUNT(*) AS n FROM validation_jobs WHERE state IN ('running','queued')").first();
+  assert.equal(left.n, 5);
+  assert.deepEqual(await sweep(), { stuck: 0, exhausted: 5 });
+});
+
+test('정리: cron(scheduled)에서 실행된다', async () => {
+  await seed();
+  const event = await worker.scheduled({ cron: '17 * * * *', scheduledTime: new Date() });
+  assert.equal(event.outcome, 'ok');
+  assert.equal((await jobRow()).state, 'pending_publish');
+});
+
+test('cron: 한 작업이 실패해도 나머지 정리 작업은 실행되고 오류 이름만 남긴다', async (t) => {
+  const errors = t.mock.method(console, 'error', () => {});
+  const broken = { DB: { prepare() { throw new RangeError('db down'); }, batch() { throw new RangeError('db down'); } }, MEDIA: {} };
+  await assert.rejects(bundledWorker.scheduled({}, broken), /scheduled tasks failed: 3/);
+  assert.deepEqual(errors.mock.calls.map((c) => c.arguments),
+    ['account-deletion', 'upload-cleanup', 'validation-sweep'].map((name) => ['scheduled task failed', name, 'RangeError']));
 });
