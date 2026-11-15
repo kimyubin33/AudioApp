@@ -233,7 +233,7 @@ test('웹 계정 삭제는 기본 미선택 확인 후 접수하고 앱 세션 �
  try{
   await env.DB.prepare("UPDATE users SET google_sub='dev-user' WHERE id='web_owner'").run();
   const page=await context.newPage();await page.goto(base+'/delete-account');
-  await expect(page.getByRole('heading',{name:'AudioApp 계정 삭제',exact:true})).toBeVisible();
+  await expect(page.getByRole('heading',{name:'A & M Audio 계정 삭제',exact:true})).toBeVisible();
   const confirm=page.getByLabel('삭제 범위를 확인했으며 계정 삭제를 요청합니다.');
   await expect(confirm).not.toBeChecked();
   await page.getByRole('button',{name:'개발 계정 삭제 요청',exact:true}).click();

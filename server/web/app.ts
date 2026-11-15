@@ -435,12 +435,12 @@ async function showReview(id:string,target:HTMLElement,reload:()=>Promise<void>)
 channel?.addEventListener('message',()=>{if(deletionPage)return;if(saveTimer){message('다른 탭의 초안 변경이 있습니다. 입력을 저장하기 전에 최신 상태를 확인해 주세요.',true);return;}if(!busy)void attempt(async()=>{drafts=await allDrafts();if(!drafts.some(d=>d.id===selected))selected=drafts[0]?.id??'';renderCreator();});});
 window.addEventListener('beforeunload',e=>{if(busy||saveTimer){e.preventDefault();e.returnValue='';}});
 async function renderDeletion(config:Json){
- $('page-title').textContent='AudioApp 계정 삭제';
+ $('page-title').textContent='A & M Audio 계정 삭제';
  const intro=document.querySelector('.intro p:last-child');if(intro)intro.textContent='앱을 설치하지 않고 계정 삭제를 요청할 수 있습니다.';
  $('account').replaceChildren();$('workspace').replaceChildren();$('login').replaceChildren();
  const box=node('section','','panel');$('workspace').append(box);
  box.append(node('h2','계정과 업로드 콘텐츠 삭제'),
-  node('p','Google 계정 자체는 삭제되지 않습니다. 삭제 요청 즉시 AudioApp 계정 접근과 콘텐츠 공개를 중단합니다. 전송 중인 파일의 정리가 가능한 시점부터 원본 파일과 계정·구독·차단·신고 데이터 삭제를 순차 처리합니다. 파일 정리 실패 시 자동 재시도하며, 처리 중에는 같은 계정으로 가입할 수 없습니다.'),
+  node('p','Google 계정 자체는 삭제되지 않습니다. 삭제 요청 즉시 A & M Audio 계정 접근과 콘텐츠 공개를 중단합니다. 전송 중인 파일의 정리가 가능한 시점부터 원본 파일과 계정·구독·차단·신고 데이터 삭제를 순차 처리합니다. 파일 정리 실패 시 자동 재시도하며, 처리 중에는 같은 계정으로 가입할 수 없습니다.'),
   node('p','기기에만 남은 초안·청취 기록·저장 목록은 해당 기기에서 별도로 삭제해 주세요. 다른 콘텐츠의 운영 이력에 남은 계정 식별자는 익명화합니다.'));
  policyLinks(box,config.policy);
  if(config.policy?.support_email)box.append(node('p','처리 문의: '+config.policy.support_email));

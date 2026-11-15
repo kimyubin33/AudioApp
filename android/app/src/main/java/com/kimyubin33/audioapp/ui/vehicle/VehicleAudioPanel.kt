@@ -48,7 +48,7 @@ fun VehicleAudioPanel(
             0f to WaterInk.copy(alpha=.24f), .46f to Color.Transparent,
             .74f to WaterInk.copy(alpha=.72f), 1f to WaterInk.copy(alpha=.98f))))
         Row(Modifier.fillMaxWidth().padding(padding), verticalAlignment=Alignment.CenterVertically) {
-            Image(painterResource(R.drawable.ic_brand_mark),"AI & ME",Modifier.size(64.dp,36.dp),colorFilter=ColorFilter.tint(WaterPaper))
+            Image(painterResource(R.drawable.ic_brand_mark),"A & M Audio",Modifier.size(64.dp,36.dp),colorFilter=ColorFilter.tint(WaterPaper))
             Spacer(Modifier.weight(1f))
             Box(Modifier.size(5.dp).background(Color(0xFFB4C8AB),CircleShape))
             Spacer(Modifier.width(8.dp))

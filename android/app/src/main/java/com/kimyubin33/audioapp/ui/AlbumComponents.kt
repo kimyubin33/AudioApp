@@ -55,7 +55,7 @@ internal fun AlbumHeader(onSearch: (() -> Unit)? = null, onCreate: (() -> Unit)?
     Row(Modifier.fillMaxWidth().padding(start=24.dp,end=16.dp,top=12.dp,bottom=12.dp), verticalAlignment=Alignment.CenterVertically) {
         Image(
             painter = painterResource(R.drawable.ic_brand_mark),
-            contentDescription = "AI & ME",
+            contentDescription = "A & M Audio",
             modifier = Modifier.width(64.dp).height(40.dp),
         )
         Spacer(Modifier.weight(1f))
